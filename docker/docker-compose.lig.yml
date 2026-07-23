@@ -1,0 +1,71 @@
+x-lig-logging: &lig-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+services:
+  ragflow-cpu:
+    env_file:
+      - .env
+      - .env.lig
+    environment:
+      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in docker/.env.secret}
+    mem_limit: 5g
+    logging: *lig-logging
+    command:
+      - --enable-adminserver
+      - --init-model-provider-tables
+      - --enable-mcpserver
+      - --mcp-host=0.0.0.0
+      - --mcp-port=9382
+      - --mcp-base-url=http://127.0.0.1:9380
+      - --mcp-script-path=/ragflow/mcp/server/server.py
+      - --mcp-mode=self-host
+
+  infinity:
+    env_file:
+      - .env
+      - .env.lig
+    mem_limit: 1536m
+    logging: *lig-logging
+
+  mysql:
+    env_file:
+      - .env
+      - .env.lig
+    mem_limit: 1g
+    logging: *lig-logging
+
+  minio:
+    env_file:
+      - .env
+      - .env.lig
+    mem_limit: 512m
+    logging: *lig-logging
+
+  redis:
+    env_file:
+      - .env
+      - .env.lig
+    mem_limit: 192m
+    logging: *lig-logging
+
+  ollama:
+    image: ${OLLAMA_IMAGE}
+    ports:
+      - ${OLLAMA_PORT}:11434
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: 10m
+    networks:
+      - ragflow
+    restart: unless-stopped
+    mem_limit: 3g
+    logging: *lig-logging
+
+volumes:
+  ollama_data:
+    driver: local
