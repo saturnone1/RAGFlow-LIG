@@ -1,0 +1,255 @@
+import { cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+
+const [webRoot, overlayRoot] = process.argv.slice(2);
+
+if (!webRoot || !overlayRoot) {
+  throw new Error('Usage: node apply-overlay.mjs <web-root> <overlay-root>');
+}
+
+const expectedHashes = {
+  'index.html': 'ec8b1e543133a6ef043a27d4ac092947d8d2114856cf8b55d0178183f3177ead',
+  'src/app.tsx': '934eb8ed06386dfece50770ad9f0c1cf47b4c4b4034c5d7b4c0c173bedeb9a6a',
+  'src/main.tsx': '4e1059ccbf162543782c92f38bc7dd8367f548b289dff45badafd2a36d0639b0',
+  'src/layouts/components/header.tsx': '64a55c4f420cc206429296c087dfa91bdce38660acb8931c838af6449307ebc6',
+  'src/layouts/components/global-navbar.tsx': '6fd4b78b83608488c12b36d5506b54d7bbdf74ec48ceca5e29f03cce23eb6cdd',
+  'src/layouts/components/mobile-menu-footer.tsx': '48b9e80c4c18832daf3c96c1410dfddce64c3063ac81a96a49895b98bc063d98',
+  'src/pages/login-next/index.tsx': '732de089c1abeb011d135db20b6a6f72a0bddb2af14d61b729220221f923417b',
+  'src/pages/home/banner.tsx': 'f066aef325bde293600ca768549e73adae709f717e5e62088265bb74e1298566',
+  'src/pages/admin/layouts/navigation-layout.tsx': 'd5355804d831d0d8bf93da1bca4cabfb74ef818064c3349b262d828b2a8eb6df',
+  'src/locales/en.ts': 'b4780d29761defb95869962e7ff270a09b3b7ccc81f6130b9ebf5328454101b2',
+  'src/locales/ko.ts': 'e2fcf6fd6d23ade3700acf15aa670dd0bcafb31e5586ef0dc175e7e71a3f1d3f',
+  'src/components/api-service/chat-overview-modal/backend-service-api.tsx': '6d5c6a24167883269be157c01f3a36fe3324d1c43e87f242a23aa9a37eec752d',
+  'src/components/embed-dialog/index.tsx': '47aec9038666136f4536c0f60ad2b4685dd9510ed7eec0a0e9e7e165b05cf741',
+  'src/constants/agent.tsx': 'cc248cba0aa8d9ef309a48097ad24cab5da828658f9a896ba1810f2004e2f67c',
+};
+
+function sha256(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+for (const [relativePath, expected] of Object.entries(expectedHashes)) {
+  const actual = sha256(join(webRoot, relativePath));
+  if (actual !== expected) {
+    throw new Error(
+      `Unsupported RAGFlow web source: ${relativePath}\nexpected ${expected}\nactual   ${actual}`,
+    );
+  }
+}
+
+function read(relativePath) {
+  return readFileSync(join(webRoot, relativePath), 'utf8').replace(/\r\n/g, '\n');
+}
+
+function write(relativePath, content) {
+  writeFileSync(join(webRoot, relativePath), content, 'utf8');
+}
+
+function replaceOnce(content, before, after, label) {
+  const first = content.indexOf(before);
+  if (first < 0 || content.indexOf(before, first + before.length) >= 0) {
+    throw new Error(`Expected exactly one match while applying ${label}`);
+  }
+  return content.slice(0, first) + after + content.slice(first + before.length);
+}
+
+let content = read('src/main.tsx');
+content = replaceOnce(
+  content,
+  "import './global.less';",
+  "import './global.less';\nimport './brand/brand.css';",
+  'brand stylesheet import',
+);
+write('src/main.tsx', content);
+
+content = read('src/app.tsx');
+content = replaceOnce(
+  content,
+  'defaultTheme={ThemeEnum.Dark}',
+  'defaultTheme={ThemeEnum.Light}',
+  'light default theme',
+);
+write('src/app.tsx', content);
+
+content = read('index.html');
+content = replaceOnce(
+  content,
+  '<link rel="icon" type="image/svg+xml" href="/logo.svg" />',
+  '<link rel="icon" type="image/png" href="/brand/lig-signature-blue.png" />\n    <meta name="theme-color" content="#002f6d" />',
+  'favicon',
+);
+content = replaceOnce(content, '<title>RAGFlow</title>', '<title>LIG AI Knowledge Hub</title>', 'document title');
+write('index.html', content);
+
+content = read('src/layouts/components/header.tsx');
+content = content.replace("import { IconFontFill } from '@/components/icon-font';\n", '');
+content = content.replace('  LucideCircleHelp,\n', '');
+content = "import { BrandHeaderLogo } from '@/brand/brand-logo';\n" + content;
+content = replaceOnce(
+  content,
+  `className="flex size-10 shrink-0 items-center justify-center"
+            >
+              <img src={'/logo.svg'} alt="RAGFlow logo" className="size-10" />`,
+  `className="flex shrink-0 items-center"
+            >
+              <BrandHeaderLogo />`,
+  'header logo',
+);
+content = replaceOnce(
+  content,
+  `          {!isCompact && (
+            <>
+              <a
+                className="inline-flex p-2 text-text-secondary hover:text-text-primary focus-visible:text-text-primary"
+                target="_blank"
+                href="https://discord.com/invite/NjYzJD3GM3"
+                rel="noreferrer noopener"
+              >
+                <IconFontFill name="a-DiscordIconSVGVectorIcon" />
+              </a>
+
+              <a
+                className="inline-flex p-2 text-text-secondary hover:text-text-primary focus-visible:text-text-primary"
+                target="_blank"
+                href="https://github.com/infiniflow/ragflow"
+                rel="noreferrer noopener"
+              >
+                <IconFontFill name="GitHub" />
+              </a>
+            </>
+          )}
+
+`,
+  '',
+  'community links',
+);
+content = replaceOnce(
+  content,
+  `              <Button
+                asLink
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                to="https://ragflow.io/docs/dev/category/user-guides"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <LucideCircleHelp className="size-[1em]" />
+              </Button>
+
+`,
+  '',
+  'external help link',
+);
+content = content.replace(
+  `          <a className="inline-flex p-2">
+            <IconFontFill name="a-DiscordIconSVGVectorIcon" />
+          </a>
+          <a className="inline-flex p-2">
+            <IconFontFill name="GitHub" />
+          </a>
+`,
+  '',
+);
+content = content.replace(
+  `          <Button variant="ghost" size="icon" className="size-8">
+            <LucideCircleHelp className="size-[1em]" />
+          </Button>
+`,
+  '',
+);
+write('src/layouts/components/header.tsx', content);
+
+content = read('src/layouts/components/global-navbar.tsx');
+content = "import { BrandSignature } from '@/brand/brand-logo';\n" + content;
+content = replaceOnce(
+  content,
+  '<img src="/logo.svg" alt="RAGFlow logo" className="size-9" />',
+  '<BrandSignature className="w-40 lig-logo-light" />\n          <BrandSignature inverse className="w-40 lig-logo-dark" />',
+  'mobile navigation logo',
+);
+write('src/layouts/components/global-navbar.tsx', content);
+
+content = read('src/pages/login-next/index.tsx');
+content = content.replace("import Spotlight from '@/components/spotlight';\n", '');
+content = content.replace("import { BgSvg } from './bg';\n", '');
+content = "import { BrandLoginShell } from '@/brand/brand-login-shell';\n" + content;
+content = replaceOnce(
+  content,
+  'className=" w-full max-w-[540px] bg-bg-component backdrop-blur-sm rounded-2xl shadow-xl pt-14 pl-10 pr-10 pb-2 border border-border-button "',
+  'className="lig-login-card w-full max-w-[540px] bg-bg-component pt-14 pl-10 pr-10 pb-2"',
+  'login card style',
+);
+content = replaceOnce(
+  content,
+  'className="bg-metallic-gradient border-b-[#00BEB4] border-b-2 hover:bg-metallic-gradient hover:border-b-[#02bcdd] w-full my-8"',
+  'className="lig-primary-button w-full my-8"',
+  'login primary button',
+);
+content = replaceOnce(
+  content,
+  `    } catch (errorInfo) {
+      console.log('Failed:', errorInfo);
+    }`,
+  `    } catch {
+      // Error feedback is handled by the authentication request hooks.
+    }`,
+  'login console cleanup',
+);
+const loginReturnStart = content.indexOf('  return (\n    <>\n      <Spotlight', content.indexOf('const Login ='));
+const loginReturnEnd = content.indexOf('\n  );\n};\n\nexport default Login;', loginReturnStart);
+if (loginReturnStart < 0 || loginReturnEnd < 0) {
+  throw new Error('Unable to locate Login return block');
+}
+const loginReturn = `  return (
+    <BrandLoginShell>
+      <FlipCard3D isLoginPage={isLoginPage}>
+        <LoginFormContent
+          isLoginPage={isLoginPage}
+          title={title}
+          form={form}
+          loading={loading}
+          onCheck={onCheck}
+          changeTitle={changeTitle}
+          registerEnabled={registerEnabled}
+          channels={channels || []}
+          handleLoginWithChannel={handleLoginWithChannel}
+          t={t}
+          disablePasswordLogin={!!config?.disablePasswordLogin}
+        />
+      </FlipCard3D>
+    </BrandLoginShell>`;
+content = content.slice(0, loginReturnStart) + loginReturn + content.slice(loginReturnEnd);
+write('src/pages/login-next/index.tsx', content);
+
+content = read('src/pages/admin/layouts/navigation-layout.tsx');
+content = replaceOnce(content, '              {version}', '              Based on RAGFlow {version}', 'admin attribution');
+write('src/pages/admin/layouts/navigation-layout.tsx', content);
+
+for (const localePath of ['src/locales/en.ts', 'src/locales/ko.ts']) {
+  content = read(localePath).replaceAll('RAGFlow', 'LIG AI Knowledge Hub');
+  write(localePath, content);
+}
+
+content = read('src/components/api-service/chat-overview-modal/backend-service-api.tsx');
+content = replaceOnce(content, '<CardTitle>RAGFlow API</CardTitle>', '<CardTitle>LIG AI Knowledge Hub API</CardTitle>', 'API card title');
+write('src/components/api-service/chat-overview-modal/backend-service-api.tsx', content);
+
+content = read('src/components/embed-dialog/index.tsx');
+content = replaceOnce(content, 'placeholder="Powered by RAGFlow"', 'placeholder="LIG AI Knowledge Hub"', 'embed branding placeholder');
+content = replaceOnce(content, 'placeholder="https://ragflow.io"', 'placeholder="https://"', 'embed website placeholder');
+write('src/components/embed-dialog/index.tsx', content);
+
+content = read('src/constants/agent.tsx');
+content = replaceOnce(
+  content,
+  "https://github.com/infiniflow/ragflow",
+  'https://example.internal/api',
+  'agent code template URL',
+);
+write('src/constants/agent.tsx', content);
+
+cpSync(overlayRoot, webRoot, { recursive: true, force: true });
+
+console.log('LIG AI Knowledge Hub overlay applied successfully.');

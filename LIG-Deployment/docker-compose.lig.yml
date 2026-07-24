@@ -7,10 +7,12 @@ x-lig-logging: &lig-logging
 services:
   ragflow-cpu:
     env_file:
-      - .env
-      - .env.lig
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
-      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in docker/.env.secret}
+      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+    volumes:
+      - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
     mem_limit: 5g
     logging: *lig-logging
     command:
@@ -25,33 +27,35 @@ services:
 
   infinity:
     env_file:
-      - .env
-      - .env.lig
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     mem_limit: 1536m
     logging: *lig-logging
 
   mysql:
     env_file:
-      - .env
-      - .env.lig
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     mem_limit: 1g
     logging: *lig-logging
 
   minio:
     env_file:
-      - .env
-      - .env.lig
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     mem_limit: 512m
     logging: *lig-logging
 
   redis:
     env_file:
-      - .env
-      - .env.lig
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     mem_limit: 192m
     logging: *lig-logging
 
   ollama:
+    profiles:
+      - ollama
     image: ${OLLAMA_IMAGE}
     ports:
       - ${OLLAMA_PORT}:11434

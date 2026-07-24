@@ -1,0 +1,65 @@
+{
+  "downloadedAt": "2026-07-24",
+  "usage": "Authorized internal LIG AI Knowledge Hub white-label UI",
+  "assets": [
+    {
+      "path": "public/brand/lig-signature-blue.png",
+      "source": "https://www.ligdefenseaerospace.com/res/attachment/Signature_PNG.zip",
+      "sha256": "5bcc9e2794be17e0e23a54715467f68f5dcd9950828e4325fcbebdf00913aad3",
+      "usage": "Light surfaces, header, mobile login and favicon"
+    },
+    {
+      "path": "public/brand/lig-signature-white.png",
+      "source": "https://www.ligdefenseaerospace.com/res/attachment/Signature_PNG.zip",
+      "sha256": "b1f621ecbe9ccdee83188ba49edce823124372dce6bb450d854da7fa86d465b6",
+      "usage": "Video overlays and dark surfaces"
+    },
+    {
+      "path": "public/brand/company-hero.mp4",
+      "source": "https://www.ligdefenseaerospace.com/res/vdo/new_company_dna.mp4",
+      "sha256": "e43e23be2531b761b42b48a55712b5198bdb2518de0a397ef4bacbd1a0ae8a8a",
+      "usage": "Muted login and home hero background"
+    },
+    {
+      "path": "public/brand/company-hero-poster.jpg",
+      "source": "https://www.ligdefenseaerospace.com/res/img/vdo_poster.jpg",
+      "sha256": "130a3be8c130c6ded82f468b6765f5b197779aa7429870e0f1e7a678595327bb",
+      "usage": "Mobile, reduced-motion and slow-network fallback"
+    },
+    {
+      "path": "public/brand/fonts/Pretendard-Regular.woff2",
+      "source": "https://www.ligdefenseaerospace.com/res/font/woff2/Pretendard-Regular.woff2",
+      "sha256": "98f99c338e1bff4e17f1e858c2c678e70d1dec044b700902ab3bb573454f2bc7"
+    },
+    {
+      "path": "public/brand/fonts/Pretendard-Medium.woff2",
+      "source": "https://www.ligdefenseaerospace.com/res/font/woff2/Pretendard-Medium.woff2",
+      "sha256": "c0f4afc65ee674aa6c4074d78d82d3f2261ce3a6c237fd07cb6ef261cf9975c5"
+    },
+    {
+      "path": "public/brand/fonts/Pretendard-SemiBold.woff2",
+      "source": "https://www.ligdefenseaerospace.com/res/font/woff2/Pretendard-SemiBold.woff2",
+      "sha256": "0b651bef8cbfebc6d96f38e1400c3995fd507b732cd3e50cf6f4822eb93bc1a5"
+    },
+    {
+      "path": "public/brand/fonts/Pretendard-Bold.woff2",
+      "source": "https://www.ligdefenseaerospace.com/res/font/woff2/Pretendard-Bold.woff2",
+      "sha256": "c8dc160fce5bc9ed447568dc0f3ddfdae63efb1c0b7eb67e7f20f4490bb61217"
+    },
+    {
+      "path": "public/brand/fonts/Montserrat-Regular.woff2",
+      "source": "https://www.ligdefenseaerospace.com/res/font/woff2/Montserrat-Regular.woff2",
+      "sha256": "deb8f7fa97c4d97d81eb17d642e9c4c17df2089ce99390b43a63b4eed2326256"
+    },
+    {
+      "path": "public/brand/fonts/Montserrat-SemiBold.woff2",
+      "source": "https://www.ligdefenseaerospace.com/res/font/woff2/Montserrat-SemiBold.woff2",
+      "sha256": "15c517caed2a4db7bde176b5f9d2d70fc86d73c541c861a8a94ce48efeaf350b"
+    },
+    {
+      "path": "public/brand/fonts/Montserrat-Bold.woff2",
+      "source": "https://www.ligdefenseaerospace.com/res/font/woff2/Montserrat-Bold.woff2",
+      "sha256": "9f56e8d4acc04372d4c109b3e96ccda8631ae41b2f2cd0c78c9c504f23636725"
+    }
+  ]
+}

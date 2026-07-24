@@ -1,0 +1,415 @@
+@font-face {
+  font-family: 'Pretendard';
+  src: url('/brand/fonts/Pretendard-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Pretendard';
+  src: url('/brand/fonts/Pretendard-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('/brand/fonts/Pretendard-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('/brand/fonts/Pretendard-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/brand/fonts/Montserrat-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/brand/fonts/Montserrat-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Montserrat';
+  src: url('/brand/fonts/Montserrat-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: 'Pretendard', 'Montserrat', system-ui, sans-serif;
+  --primary: 214 100% 21%;
+  --primary-foreground: 0 0% 100%;
+  --accent-primary: 0 47 109;
+  --border-accent: #002f6d;
+  --button-blue-text: #002f6d;
+  --colors-text-core-standard: #002f6d;
+  --colors-outline-sentiment-primary: #002f6d;
+  --background-core-standard: #002f6d;
+  --background-core-weak: #e8eef5;
+  --ring: 214 100% 21%;
+  --radius: 0.375rem;
+}
+
+.dark {
+  --background: 214 45% 8%;
+  --popover: 214 42% 10%;
+  --card: 214 42% 10%;
+  --border: 210 18% 24%;
+  --input: 210 18% 24%;
+  --accent-primary: 208 211 212;
+  --border-accent: #d0d3d4;
+  --colors-text-core-standard: #d0d3d4;
+  --colors-outline-sentiment-primary: #d0d3d4;
+  --bg-base: #0b1725;
+  --bg-component: #101f31;
+  --bg-card: rgba(208, 211, 212, 0.08);
+  --bg-canvas: 11 23 37;
+  --bg-list: 16 31 49;
+}
+
+html,
+body,
+#root {
+  font-family: var(--font-sans);
+}
+
+body {
+  letter-spacing: -0.012em;
+}
+
+button,
+[role='button'],
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+.lig-header-brand {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: 40px;
+  gap: 12px;
+}
+
+.lig-header-signature {
+  width: 132px;
+  max-height: 30px;
+  object-fit: contain;
+}
+
+.lig-logo-dark {
+  display: none;
+}
+
+.dark .lig-logo-light {
+  display: none;
+}
+
+.dark .lig-logo-dark {
+  display: block;
+}
+
+.lig-header-divider {
+  width: 1px;
+  height: 22px;
+  background: #d0d3d4;
+}
+
+.lig-header-product {
+  color: rgb(var(--text-primary));
+  font-family: 'Montserrat', 'Pretendard', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.lig-login-shell {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(480px, 0.85fr);
+  background: #fff;
+}
+
+.lig-login-visual {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #002f6d;
+  color: #fff;
+}
+
+.lig-login-media,
+.lig-home-hero-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.lig-login-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, rgba(0, 25, 58, 0.92), rgba(0, 47, 109, 0.58) 55%, rgba(0, 20, 46, 0.32));
+}
+
+.lig-login-visual-content {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: clamp(48px, 6vw, 96px);
+}
+
+.lig-login-signature {
+  position: absolute;
+  top: clamp(36px, 5vw, 64px);
+  left: clamp(48px, 6vw, 96px);
+  width: min(280px, 45%);
+}
+
+.lig-diagonal-mark {
+  width: 72px;
+  height: 8px;
+  margin-bottom: 28px;
+  background: #d0d3d4;
+  transform: skewX(-35deg);
+  transform-origin: left;
+}
+
+.lig-login-kicker,
+.lig-home-kicker {
+  margin: 0 0 16px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+}
+
+.lig-login-visual h1 {
+  max-width: 680px;
+  margin: 0;
+  font-family: 'Montserrat', 'Pretendard', sans-serif;
+  font-size: clamp(42px, 5vw, 76px);
+  line-height: 1.02;
+  letter-spacing: -0.055em;
+}
+
+.lig-login-tagline {
+  max-width: 620px;
+  margin: 24px 0 0;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: clamp(17px, 1.6vw, 24px);
+}
+
+.lig-login-form-panel {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px clamp(24px, 4vw, 72px);
+  background: #f8f9fa;
+  color: #14191f;
+}
+
+.lig-login-form-wrap {
+  width: 100%;
+  max-width: 560px;
+}
+
+.lig-login-mobile-brand {
+  display: none;
+}
+
+.lig-login-card {
+  border: 1px solid #e1e4e6;
+  border-radius: 6px;
+  box-shadow: 0 24px 60px rgba(0, 28, 65, 0.1);
+}
+
+.lig-primary-button {
+  min-height: 44px;
+  border: 1px solid #002f6d !important;
+  border-radius: 4px !important;
+  background: #002f6d !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+
+.lig-primary-button:hover {
+  background: #001f49 !important;
+}
+
+.lig-login-copyright {
+  margin: 24px 0 0;
+  color: #7b8288;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.lig-home-hero {
+  position: relative;
+  min-height: 280px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #002f6d;
+  color: #fff;
+}
+
+.lig-home-hero-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(0, 25, 58, 0.95), rgba(0, 47, 109, 0.7) 54%, rgba(0, 25, 58, 0.15));
+}
+
+.lig-home-hero-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: 280px;
+  max-width: 780px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 44px clamp(28px, 5vw, 72px);
+}
+
+.lig-home-signature {
+  width: 184px;
+  margin-bottom: 32px;
+}
+
+.lig-home-hero h1 {
+  margin: 0;
+  font-size: clamp(28px, 3vw, 46px);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.04em;
+}
+
+.lig-home-hero-content > p:last-child {
+  margin: 14px 0 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-family: 'Montserrat', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lig-home-diagonal {
+  position: absolute;
+  right: -70px;
+  bottom: -120px;
+  width: 260px;
+  height: 360px;
+  border-left: 20px solid rgba(208, 211, 212, 0.65);
+  transform: rotate(34deg);
+}
+
+@media (max-width: 1180px) {
+  .lig-header-signature {
+    width: 112px;
+  }
+
+  .lig-header-product {
+    display: none;
+  }
+
+  .lig-header-divider {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .lig-login-shell {
+    display: block;
+  }
+
+  .lig-login-visual {
+    display: none;
+  }
+
+  .lig-login-form-panel {
+    min-height: 100vh;
+    padding: 28px 20px;
+  }
+
+  .lig-login-mobile-brand {
+    display: flex;
+    width: 100%;
+    max-width: 540px;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+    color: #002f6d;
+    font-family: 'Montserrat', sans-serif;
+  }
+
+  .lig-login-mobile-signature {
+    width: 150px;
+  }
+
+  .lig-login-copyright {
+    text-align: center;
+  }
+}
+
+@media (max-width: 560px) {
+  .lig-login-mobile-brand {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .lig-login-card {
+    padding: 32px 24px 4px !important;
+  }
+
+  .lig-home-hero {
+    min-height: 240px;
+  }
+
+  .lig-home-hero-content {
+    min-height: 240px;
+    padding: 28px 24px;
+  }
+
+  .lig-home-signature {
+    width: 150px;
+    margin-bottom: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

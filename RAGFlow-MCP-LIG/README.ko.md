@@ -21,7 +21,7 @@ RAGFlow에 포함된 공식 MCP는 검색과 조회에 집중합니다. 이 관�
 
 ## 실행 환경
 
-- RAGFlow API: 기본값 `http://127.0.0.1:9380`
+- LIG 배포의 RAGFlow API: `http://127.0.0.1:19380`
 - MCP Streamable HTTP: 기본값 `http://127.0.0.1:42220/mcp`
 - 상태 확인: `http://127.0.0.1:42220/healthz`
 - 소스 빌드: .NET 8 SDK 이상
@@ -30,10 +30,18 @@ RAGFlow에 포함된 공식 MCP는 검색과 조회에 집중합니다. 이 관�
 RAGFlow UI의 사용자 설정/API 메뉴에서 API 키를 만든 뒤 현재 PowerShell 세션에만 전달합니다. 키를 소스, Compose 파일 또는 MCP 클라이언트가 공유하는 저장소에 기록하지 마십시오.
 
 ```powershell
-$env:RAGFLOW_BASE_URL='http://127.0.0.1:9380'
+$env:RAGFLOW_BASE_URL='http://127.0.0.1:19380'
 $env:RAGFLOW_API_KEY='ragflow-...'
 $env:RAGFLOW_WRITES_ENABLED='true'
 dotnet run --project src/RagFlowMcp.csproj
+```
+
+LIG 로컬 배포에서는 저장소의 `LIG-Deployment/.env.secret`을 읽어 관리 MCP를 백그라운드로 시작하는 스크립트를 사용할 수 있습니다.
+
+```powershell
+.\start-lig-ragflow-mcp.ps1
+# 실행 중인 프로세스를 새 빌드로 교체
+.\start-lig-ragflow-mcp.ps1 -Restart
 ```
 
 자체 포함 Windows 배포본은 다음 명령으로 만듭니다.
@@ -51,7 +59,7 @@ Streamable HTTP를 지원하는 클라이언트에는 `http://127.0.0.1:42220/mc
 
 | 변수 | 기본값 | 설명 |
 | --- | --- | --- |
-| `RAGFLOW_BASE_URL` | `http://127.0.0.1:9380` | RAGFlow REST API 주소 |
+| `RAGFLOW_BASE_URL` | `http://127.0.0.1:19380` | RAGFlow REST API 주소 |
 | `RAGFLOW_API_KEY` | 없음 | RAGFlow API 키, 필수 |
 | `RAGFLOW_WRITES_ENABLED` | `true` | `false`이면 생성·수정·삭제·파싱 제어 차단 |
 | `ASPNETCORE_URLS` | `http://127.0.0.1:42220` | 관리 MCP 수신 주소 |
@@ -77,6 +85,6 @@ $env:RAGFLOW_API_KEY='ragflow-...'
 
 ## 에어갭 운용
 
-이 실행 파일만으로 RAG 기능이 생기는 것은 아닙니다. 에어갭 PC에는 `RAGFlow-LIG`의 Docker 이미지, Ollama 임베딩 모델, RAGFlow 데이터 볼륨이 필요합니다. 온라인 PC에서 `RAGFlow-LIG/docker/airgap-export.ps1`로 반입 묶음을 만들고 오프라인 PC에서 `airgap-import.ps1`로 복원한 다음 RAGFlow를 먼저 시작하십시오.
+이 실행 파일만으로 RAG 기능이 생기는 것은 아닙니다. 에어갭 PC에는 RAGFlow Docker 이미지, Ollama 임베딩 모델, RAGFlow 데이터 볼륨이 필요합니다. 온라인 PC에서 `LIG-Deployment/airgap-export.ps1`로 반입 묶음을 만들고 오프라인 PC에서 `airgap-import.ps1`로 복원한 다음 RAGFlow를 먼저 시작하십시오.
 
 API 키는 반입 묶음에 포함하지 않습니다. 오프라인 RAGFlow UI에서 새로 만들고 이 MCP 프로세스의 환경변수로 전달합니다. 임베딩 모델은 특정 PDF 전용 데이터가 아니라 모든 문서에 재사용하는 범용 모델입니다.

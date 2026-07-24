@@ -14,11 +14,12 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 }
 
-$start = [Diagnostics.ProcessStartInfo]::new("dotnet")
+$adapter = Join-Path $root "src\bin\Release\net8.0\LigRagFlowMcp.exe"
+if (-not (Test-Path -LiteralPath $adapter)) { throw "Built adapter not found: $adapter" }
+$start = [Diagnostics.ProcessStartInfo]::new($adapter)
 $start.WorkingDirectory = $root
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
-$start.Arguments = 'run --project "src/RagFlowMcp.csproj" -c Release --no-build'
 $start.Environment["RAGFLOW_BASE_URL"] = $BaseUrl
 $start.Environment["RAGFLOW_API_KEY"] = $ApiKey
 $start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:42220"
