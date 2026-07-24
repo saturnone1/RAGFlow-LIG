@@ -25,6 +25,29 @@ services:
       - --mcp-script-path=/ragflow/mcp/server/server.py
       - --mcp-mode=self-host
 
+  ragflow-mcp-lig:
+    image: ${RAGFLOW_MCP_LIG_IMAGE:?Set RAGFLOW_MCP_LIG_IMAGE in LIG-Deployment/.env.lig}
+    depends_on:
+      ragflow-cpu:
+        condition: service_started
+    environment:
+      RAGFLOW_BASE_URL: http://ragflow-cpu:9380
+      RAGFLOW_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      RAGFLOW_WRITES_ENABLED: "true"
+      RAGFLOW_FILE_WRITES_ENABLED: "false"
+      RAGFLOW_MAX_TEXT_RESPONSE_MB: "4"
+      LIG_MCP_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+    ports:
+      - ${RAGFLOW_MCP_LIG_PORT:?Set RAGFLOW_MCP_LIG_PORT in LIG-Deployment/.env.lig}:8080
+    volumes:
+      - ${LIG_MCP_DATA_DIRECTORY:?Set LIG_MCP_DATA_DIRECTORY in LIG-Deployment/.env.lig}:/data
+    networks:
+      - ragflow
+    restart: unless-stopped
+    mem_limit: 256m
+    logging: *lig-logging
+
   infinity:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}

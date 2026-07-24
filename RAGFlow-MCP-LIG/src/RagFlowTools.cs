@@ -11,6 +11,21 @@ public sealed class RagFlowTools
     [McpServerTool(ReadOnly = true), Description("Check the RAGFlow endpoint and adapter configuration without exposing the API key.")]
     public Task<object> RagFlowConfig() => _client.HealthAsync();
 
+    [McpServerTool(ReadOnly = true), Description("List the RAGFlow v0.26.4 API areas and routes available through the generic MCP API tools.")]
+    public object RagFlowApiCatalog() => global::RagFlowApiCatalog.Describe();
+
+    [McpServerTool, Description("Call any non-streaming RAGFlow /api/v1 JSON or text endpoint. Use a relative path such as api/v1/models or api/v1/retrieval. Set stream=false for completion APIs. Non-GET methods require writes to be enabled.")]
+    public Task<JsonElement> RagFlowApiRequest(string method, string relativePath, string? bodyJson = null)
+        => _client.RequestAsync(method, relativePath, bodyJson);
+
+    [McpServerTool, Description("Upload one or more local files to any multipart RAGFlow /api/v1 endpoint. formFieldsJson must be a JSON object when supplied.")]
+    public Task<JsonElement> UploadRagFlowApiFiles(string relativePath, string[] filePaths, string fieldName = "file", string? formFieldsJson = null)
+        => _client.UploadFilesAsync(relativePath, filePaths, fieldName, formFieldsJson);
+
+    [McpServerTool, Description("Save a binary or text response from any RAGFlow /api/v1 endpoint to a local absolute path. Requires RAGFLOW_FILE_WRITES_ENABLED=true. Existing files are preserved unless overwrite=true.")]
+    public Task<object> DownloadRagFlowApiResponse(string method, string relativePath, string destinationPath, string? bodyJson = null, bool overwrite = false)
+        => _client.DownloadAsync(method, relativePath, destinationPath, bodyJson, overwrite);
+
     [McpServerTool(ReadOnly = true), Description("List RAGFlow datasets, optionally filtering by name and paginating.")]
     public Task<JsonElement> ListRagFlowDatasets(string? name = null, int page = 1, int pageSize = 100)
         => _client.GetAsync($"api/v1/datasets?page={Math.Max(1, page)}&page_size={Math.Clamp(pageSize, 1, 1000)}&name={Uri.EscapeDataString(name ?? "")}");

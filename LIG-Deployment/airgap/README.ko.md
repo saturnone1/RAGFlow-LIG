@@ -6,7 +6,7 @@
 
 - Windows 10/11과 Docker Desktop(Compose v2 포함)
 - C 드라이브 여유 공간 최소 20 GiB
-- `8080`, `19380`~`19384` 등 `.env.lig`에 지정된 로컬 포트가 비어 있어야 함
+- `42200`~`42215`의 `.env.lig` 지정 로컬 포트가 비어 있어야 함
 
 ## 설치와 운영
 
@@ -16,7 +16,7 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 .\install.ps1
 ```
 
-설치 스크립트는 모든 파일의 SHA-256을 검증하고, Docker 이미지를 불러온 다음 서비스를 시작합니다. 설치가 끝나면 `http://127.0.0.1:8080`으로 접속합니다.
+설치 스크립트는 모든 파일의 SHA-256을 검증하고, Docker 이미지를 불러온 다음 서비스를 시작합니다. 설치가 끝나면 `http://127.0.0.1:42200`으로 접속합니다. 공식 MCP는 `42203`, LIG 관리 MCP는 `42206`입니다.
 
 ```powershell
 .\start.ps1
@@ -41,6 +41,7 @@ RAGFlow 컨테이너 안에서 접근 가능한 주소여야 하며, 모델명�
 ## 구성 내용
 
 - `lig/ragflow-ui:v0.26.4-1` 커스텀 UI 이미지
+- `lig/ragflow-mcp:v0.26.4-1` LIG 관리 MCP 이미지
 - `infiniflow/ragflow:v0.26.4` 롤백 이미지
 - Infinity, MySQL, MinIO, Valkey 이미지
 - 고정 버전 Compose 런타임 파일

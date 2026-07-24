@@ -1,7 +1,8 @@
 param(
-    [string]$BaseUrl = "http://127.0.0.1:9380",
+    [string]$BaseUrl = "http://127.0.0.1:42201",
     [string]$ApiKey = $env:RAGFLOW_API_KEY,
     [switch]$Crud,
+    [switch]$GenericUpload,
     [switch]$SkipBuild
 )
 
@@ -22,14 +23,19 @@ $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
 $start.Environment["RAGFLOW_BASE_URL"] = $BaseUrl
 $start.Environment["RAGFLOW_API_KEY"] = $ApiKey
-$start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:42220"
+$start.Environment["RAGFLOW_WRITES_ENABLED"] = if ($Crud -or $GenericUpload) { "true" } else { "false" }
+$start.Environment["RAGFLOW_FILE_WRITES_ENABLED"] = "true"
+$mcpApiKey = "test-$([guid]::NewGuid().ToString('N'))"
+$start.Environment["LIG_MCP_API_KEY"] = $mcpApiKey
+$start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:42206"
 $process = [Diagnostics.Process]::Start($start)
 
-function Invoke-Mcp([string]$Body, [string]$Session = "") {
+function Invoke-Mcp([string]$Body, [string]$Session = "", [switch]$WithoutAuthentication) {
     $client = [Net.Http.HttpClient]::new()
-    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Post, "http://127.0.0.1:42220/mcp")
+    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Post, "http://127.0.0.1:42206/mcp")
     try {
         [void]$request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream")
+        if (-not $WithoutAuthentication) { [void]$request.Headers.TryAddWithoutValidation("Authorization", "Bearer $mcpApiKey") }
         if ($Session) { [void]$request.Headers.TryAddWithoutValidation("Mcp-Session-Id", $Session) }
         $request.Content = [Net.Http.StringContent]::new($Body, [Text.Encoding]::UTF8, "application/json")
         $response = $client.SendAsync($request).GetAwaiter().GetResult()
@@ -50,12 +56,35 @@ function ConvertFrom-Mcp([string]$Content) {
 
 try {
     $createdDatasetId = $null
+    $uploadedFileId = $null
+    $downloadFixture = $null
+    $rejectedDownloadFixture = $null
     $health = $null
     foreach ($attempt in 1..60) {
-        try { $health = Invoke-RestMethod "http://127.0.0.1:42220/healthz" -TimeoutSec 2; break }
+        try { $health = Invoke-RestMethod "http://127.0.0.1:42206/healthz" -TimeoutSec 2; break }
         catch { if ($process.HasExited) { throw "Adapter exited: $($process.ExitCode)" }; Start-Sleep -Milliseconds 500 }
     }
     if (-not $health -or $health.status -ne "ok") { throw "Adapter health check failed" }
+
+    $externalGuard = [Diagnostics.ProcessStartInfo]::new($adapter)
+    $externalGuard.UseShellExecute = $false
+    $externalGuard.CreateNoWindow = $true
+    $externalGuard.RedirectStandardError = $true
+    $externalGuard.Environment["ASPNETCORE_URLS"] = "http://0.0.0.0:42221"
+    $externalGuard.Environment["LIG_MCP_API_KEY"] = ""
+    $externalGuardProcess = [Diagnostics.Process]::Start($externalGuard)
+    if (-not $externalGuardProcess.WaitForExit(5000)) {
+        Stop-Process -Id $externalGuardProcess.Id -Force
+        throw "MCP started on an external interface without LIG_MCP_API_KEY"
+    }
+    if ($externalGuardProcess.ExitCode -eq 0) { throw "External unauthenticated startup guard did not fail" }
+
+    try {
+        Invoke-Mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unauthenticated-test","version":"1"}}}' "" -WithoutAuthentication | Out-Null
+        throw "Unauthenticated MCP request unexpectedly succeeded"
+    } catch {
+        if ($_.Exception.Message -notmatch "MCP HTTP 401") { throw }
+    }
 
     $initialize = @{ jsonrpc="2.0"; id=1; method="initialize"; params=@{ protocolVersion="2025-06-18"; capabilities=@{}; clientInfo=@{ name="ragflow-smoke"; version="1.0" } } } | ConvertTo-Json -Depth 10 -Compress
     $initResponse = Invoke-Mcp $initialize
@@ -63,13 +92,65 @@ try {
     $toolsResponse = Invoke-Mcp (@{ jsonrpc="2.0"; id=2; method="tools/list"; params=@{} } | ConvertTo-Json -Compress) $initResponse.Session
     $tools = ConvertFrom-Mcp $toolsResponse.Content
     $names = @($tools.result.tools.name)
-    foreach ($required in @("rag_flow_config", "create_rag_flow_dataset", "upload_rag_flow_document", "start_rag_flow_parsing", "update_rag_flow_chunk", "delete_rag_flow_dataset")) {
+    foreach ($required in @("rag_flow_config", "rag_flow_api_catalog", "rag_flow_api_request", "upload_rag_flow_api_files", "download_rag_flow_api_response", "create_rag_flow_dataset", "upload_rag_flow_document", "start_rag_flow_parsing", "update_rag_flow_chunk", "delete_rag_flow_dataset")) {
         if ($required -notin $names) { throw "Missing tool: $required" }
     }
 
     $call = @{ jsonrpc="2.0"; id=3; method="tools/call"; params=@{ name="list_rag_flow_datasets"; arguments=@{ page=1; pageSize=10 } } } | ConvertTo-Json -Depth 10 -Compress
     $callResult = ConvertFrom-Mcp (Invoke-Mcp $call $initResponse.Session).Content
     if ($callResult.error -or $callResult.result.isError) { throw "Live list call failed: $($callResult | ConvertTo-Json -Depth 10 -Compress)" }
+
+    $catalogCall = @{ jsonrpc="2.0"; id=4; method="tools/call"; params=@{ name="rag_flow_api_catalog"; arguments=@{} } } | ConvertTo-Json -Depth 10 -Compress
+    $catalogResult = ConvertFrom-Mcp (Invoke-Mcp $catalogCall $initResponse.Session).Content
+    if ($catalogResult.error -or $catalogResult.result.isError) { throw "API catalog call failed: $($catalogResult | ConvertTo-Json -Depth 10 -Compress)" }
+
+    $versionCall = @{ jsonrpc="2.0"; id=5; method="tools/call"; params=@{ name="rag_flow_api_request"; arguments=@{ method="GET"; relativePath="api/v1/system/version" } } } | ConvertTo-Json -Depth 10 -Compress
+    $versionResult = ConvertFrom-Mcp (Invoke-Mcp $versionCall $initResponse.Session).Content
+    if ($versionResult.error -or $versionResult.result.isError) { throw "Generic API version call failed: $($versionResult | ConvertTo-Json -Depth 10 -Compress)" }
+
+    $modelsCall = @{ jsonrpc="2.0"; id=6; method="tools/call"; params=@{ name="rag_flow_api_request"; arguments=@{ method="GET"; relativePath="api/v1/models" } } } | ConvertTo-Json -Depth 10 -Compress
+    $modelsResult = ConvertFrom-Mcp (Invoke-Mcp $modelsCall $initResponse.Session).Content
+    if ($modelsResult.error -or $modelsResult.result.isError) { throw "Generic models API call failed: $($modelsResult | ConvertTo-Json -Depth 10 -Compress)" }
+
+    $invalidPathCall = @{ jsonrpc="2.0"; id=7; method="tools/call"; params=@{ name="rag_flow_api_request"; arguments=@{ method="GET"; relativePath="https://example.com/api/v1/system/version" } } } | ConvertTo-Json -Depth 10 -Compress
+    $invalidPathResult = ConvertFrom-Mcp (Invoke-Mcp $invalidPathCall $initResponse.Session).Content
+    if (-not $invalidPathResult.result.isError) { throw "Generic API accepted an external absolute URL" }
+
+    if (-not $Crud -and -not $GenericUpload) {
+        $writeCall = @{ jsonrpc="2.0"; id=71; method="tools/call"; params=@{ name="rag_flow_api_request"; arguments=@{ method="POST"; relativePath="api/v1/system/tokens"; bodyJson="{}" } } } | ConvertTo-Json -Depth 10 -Compress
+        $writeResult = ConvertFrom-Mcp (Invoke-Mcp $writeCall $initResponse.Session).Content
+        if (-not $writeResult.result.isError) { throw "Generic API accepted a write while RAGFLOW_WRITES_ENABLED=false" }
+    }
+
+    $downloadFixture = Join-Path ([IO.Path]::GetTempPath()) "ragflow-mcp-version-$([guid]::NewGuid().ToString('N')).json"
+    $downloadCall = @{ jsonrpc="2.0"; id=8; method="tools/call"; params=@{ name="download_rag_flow_api_response"; arguments=@{ method="GET"; relativePath="api/v1/system/version"; destinationPath=$downloadFixture } } } | ConvertTo-Json -Depth 10 -Compress
+    $downloadResult = ConvertFrom-Mcp (Invoke-Mcp $downloadCall $initResponse.Session).Content
+    if ($downloadResult.error -or $downloadResult.result.isError -or -not (Test-Path -LiteralPath $downloadFixture)) { throw "Generic download call failed: $($downloadResult | ConvertTo-Json -Depth 10 -Compress)" }
+    $downloadInfo = ([string]($downloadResult.result.content | Where-Object type -eq "text" | Select-Object -First 1).text) | ConvertFrom-Json
+    if ($downloadInfo.bytes -le 0 -or (Get-Item -LiteralPath $downloadFixture).Length -ne $downloadInfo.bytes) { throw "Generic download produced an empty or truncated file" }
+    $downloadJson = Get-Content -Raw -LiteralPath $downloadFixture | ConvertFrom-Json
+    if ($downloadJson.code -ne 0) { throw "Generic download saved a RAGFlow error response" }
+
+    $rejectedDownloadFixture = Join-Path ([IO.Path]::GetTempPath()) "ragflow-mcp-rejected-$([guid]::NewGuid().ToString('N')).json"
+    $rejectedDownloadCall = @{ jsonrpc="2.0"; id=9; method="tools/call"; params=@{ name="download_rag_flow_api_response"; arguments=@{ method="GET"; relativePath="api/v1/documents/00000000000000000000000000000000"; destinationPath=$rejectedDownloadFixture } } } | ConvertTo-Json -Depth 10 -Compress
+    $rejectedDownloadResult = ConvertFrom-Mcp (Invoke-Mcp $rejectedDownloadCall $initResponse.Session).Content
+    if (-not $rejectedDownloadResult.result.isError -or (Test-Path -LiteralPath $rejectedDownloadFixture)) { throw "Generic download persisted a RAGFlow logical error" }
+
+    if ($GenericUpload) {
+        $fixture = Join-Path $PSScriptRoot "fixture-ko.txt"
+        $uploadCall = @{ jsonrpc="2.0"; id=80; method="tools/call"; params=@{ name="upload_rag_flow_api_files"; arguments=@{ relativePath="api/v1/files"; filePaths=@($fixture); fieldName="file" } } } | ConvertTo-Json -Depth 10 -Compress
+        $uploadResult = ConvertFrom-Mcp (Invoke-Mcp $uploadCall $initResponse.Session).Content
+        if ($uploadResult.error -or $uploadResult.result.isError) { throw "Generic multipart upload failed: $($uploadResult | ConvertTo-Json -Depth 10 -Compress)" }
+        $uploadPayload = ([string]($uploadResult.result.content | Where-Object type -eq "text" | Select-Object -First 1).text) | ConvertFrom-Json
+        $uploadedFileId = @($uploadPayload.data)[0].id
+        if (-not $uploadedFileId) { throw "Generic multipart upload returned no file ID" }
+
+        $deleteBody = @{ ids=@($uploadedFileId) } | ConvertTo-Json -Compress
+        $deleteCall = @{ jsonrpc="2.0"; id=81; method="tools/call"; params=@{ name="rag_flow_api_request"; arguments=@{ method="DELETE"; relativePath="api/v1/files"; bodyJson=$deleteBody } } } | ConvertTo-Json -Depth 10 -Compress
+        $deleteResult = ConvertFrom-Mcp (Invoke-Mcp $deleteCall $initResponse.Session).Content
+        if ($deleteResult.error -or $deleteResult.result.isError) { throw "Generic upload cleanup failed" }
+        $uploadedFileId = $null
+    }
 
     if ($Crud) {
         function Invoke-Tool([int]$Id, [string]$Name, [hashtable]$Arguments) {
@@ -111,7 +192,7 @@ try {
         $createdDatasetId = $null
     }
 
-    [pscustomobject]@{ status="passed"; tools=$names.Count; liveListCall=$true; crud=[bool]$Crud; health=$health.status } | ConvertTo-Json -Compress
+    [pscustomobject]@{ status="passed"; tools=$names.Count; mcpAuthentication=$true; externalBindGuard=$true; readOnlyWriteBlocked=(-not $Crud -and -not $GenericUpload); liveListCall=$true; apiCatalog=$true; genericVersionCall=$true; genericModelsCall=$true; externalUrlBlocked=$true; genericDownloadCall=$true; downloadErrorRejected=$true; genericUpload=[bool]$GenericUpload; crud=[bool]$Crud; health=$health.status } | ConvertTo-Json -Compress
 }
 finally {
     if ($createdDatasetId) {
@@ -120,5 +201,14 @@ finally {
             Invoke-Mcp $cleanup $initResponse.Session | Out-Null
         } catch { }
     }
+    if ($uploadedFileId) {
+        try {
+            $cleanupBody = @{ ids=@($uploadedFileId) } | ConvertTo-Json -Compress
+            $cleanup = @{ jsonrpc="2.0"; id=998; method="tools/call"; params=@{ name="rag_flow_api_request"; arguments=@{ method="DELETE"; relativePath="api/v1/files"; bodyJson=$cleanupBody } } } | ConvertTo-Json -Depth 10 -Compress
+            Invoke-Mcp $cleanup $initResponse.Session | Out-Null
+        } catch { }
+    }
+    if ($downloadFixture -and (Test-Path -LiteralPath $downloadFixture)) { Remove-Item -LiteralPath $downloadFixture -Force }
+    if ($rejectedDownloadFixture -and (Test-Path -LiteralPath $rejectedDownloadFixture)) { Remove-Item -LiteralPath $rejectedDownloadFixture -Force }
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue; $process.WaitForExit() }
 }

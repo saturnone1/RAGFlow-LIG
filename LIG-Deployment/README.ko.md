@@ -6,17 +6,40 @@
 
 - 문서 엔진: Elasticsearch 대신 Infinity
 - 실행 장치: CPU
-- 내부 서비스: RAGFlow, Infinity, MySQL, MinIO, Valkey. Ollama는 선택 사항
+- 내부 서비스: RAGFlow, LIG 관리 MCP, Infinity, MySQL, MinIO, Valkey. Ollama는 선택 사항
 - 기본 임베딩: NVIDIA 공개 API의 `nvidia/llama-nemotron-embed-vl-1b-v2`
 - 에어갭 대체 임베딩: Ollama의 다국어 `qwen3-embedding:0.6b`(양자화 모델 약 639 MB)
 - 제외: Kibana, Sandbox, TEI, 별도 Docling 서비스
 - 포트: 모두 `127.0.0.1`에만 공개
-- 웹 UI: `http://127.0.0.1:8080`
-- REST API: `http://127.0.0.1:19380`
-- 공식 MCP: `http://127.0.0.1:19382/mcp`
+- 포트 블록: 기존 MCP 서버의 `42180`~`42198` 다음 대역인 `42200`~`42215`
+- 웹 UI: `http://127.0.0.1:42200`
+- REST API: `http://127.0.0.1:42201`
+- 공식 MCP: `http://127.0.0.1:42203/mcp`
+- LIG 관리 MCP: `http://127.0.0.1:42206/mcp`
 - 로그: 컨테이너마다 최대 20 MiB 파일 3개
 - 동시 처리: 문서 1개, 임베딩 배치 4개, worker 8개
 - 메모리: RAGFlow 5 GiB 상한. Ollama 선택 프로필을 사용할 때만 Ollama에 3 GiB 상한 적용
+
+전체 호스트 포트 배치는 다음과 같습니다. 컨테이너 내부 기본 포트는 바꾸지 않고 Windows 호스트에 공개되는 포트만 정렬했습니다.
+
+| 포트 | 서비스 |
+| --- | --- |
+| `42200` | LIG 웹 UI |
+| `42201` | RAGFlow REST API |
+| `42202` | RAGFlow Admin API |
+| `42203` | RAGFlow 공식 MCP |
+| `42204` | Go Admin |
+| `42205` | Go HTTP |
+| `42206` | LIG 관리 MCP |
+| `42207` | LIG 웹 HTTPS |
+| `42208` | MySQL |
+| `42209` | MinIO API |
+| `42210` | MinIO Console |
+| `42211` | Valkey/Redis |
+| `42212` | Infinity Thrift |
+| `42213` | Infinity HTTP |
+| `42214` | Infinity PostgreSQL 호환 포트 |
+| `42215` | 선택 사항인 Ollama |
 
 `LIG-Deployment/.env.lig`는 upstream 기본값을 덮어쓰고, `LIG-Deployment/docker-compose.lig.yml`은 메모리와 로그 상한을 추가합니다. 공식 소스와 Compose는 `RAGFlow/` 아래에 원본 그대로 유지되며, 데이터는 named volume에 저장되므로 컨테이너를 다시 만들어도 유지됩니다.
 
@@ -30,6 +53,7 @@ Copy-Item .env.secret.example .env.secret
 # .env.secret의 RAGFLOW_MCP_API_KEY를 RAGFlow UI에서 만든 키로 교체
 .\lig-ragflow.ps1 config
 .\lig-ragflow.ps1 pull
+.\lig-ragflow.ps1 build
 .\lig-ragflow.ps1 start
 ```
 
@@ -75,7 +99,7 @@ RAGFlow `v0.22` 이후 기본 이미지는 임베딩 모델을 포함하지 않�
 
 에어갭 반입 시에는 compose에 사용되는 모든 Docker 이미지를 인터넷 환경에서 내보내 gzip으로 압축하고, 폐쇄망에서 Docker가 압축 아카이브를 직접 복원합니다. 기본 내보내기에는 LIG UI 이미지와 공식 롤백 이미지가 모두 포함되며 Ollama는 포함하지 않습니다.
 
-온라인 PC에서 반입 묶음을 만드는 명령은 다음과 같습니다. 결과 폴더에는 커스텀 UI를 포함한 고정 버전 이미지, 공식 Compose 런타임, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
+온라인 PC에서 반입 묶음을 만드는 명령은 다음과 같습니다. 결과 폴더에는 커스텀 UI와 LIG 관리 MCP를 포함한 고정 버전 이미지, 공식 Compose 런타임, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
 내보내기 대상은 기존 파일이나 비밀값이 섞이지 않은 빈 폴더여야 합니다.
 
 ```powershell
@@ -101,4 +125,6 @@ Ollama 모델까지 반입할 경우에만 다음처럼 선택 옵션을 사용�
 
 ## MCP 범위
 
-RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. `.env.secret`에 API 키가 있으면 이 배포는 공식 MCP를 `http://127.0.0.1:19382/mcp`에 함께 시작합니다. 데이터셋과 문서의 생성·수정·삭제는 상위 폴더의 `RAGFlow-MCP-LIG` 관리 어댑터가 담당합니다. API 키를 만든 뒤 두 MCP를 함께 연결하는 것이 최종 구성입니다.
+RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://127.0.0.1:42203/mcp`와 LIG 관리 MCP `http://127.0.0.1:42206/mcp`를 RAGFlow와 함께 시작합니다. 관리 MCP는 데이터셋·문서와 나머지 `/api/v1` 운영 기능을 제공하며, 요청에는 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 Bearer 키로 사용합니다.
+
+컨테이너 MCP가 읽을 파일은 `LIG-Deployment/mcp-files`에 넣고 도구 인수에는 `/data/<파일명>`을 전달합니다. 이 폴더는 Compose에서 관리 MCP 컨테이너에만 연결됩니다.

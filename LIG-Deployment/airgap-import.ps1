@@ -11,11 +11,17 @@ $manifestPath = Join-Path $sourcePath "manifest.json"
 foreach ($file in @($imageArchive, $manifestPath)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required archive not found: $file" } }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 2) {
+if ($manifest.bundleFormat -ne 3) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
 if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-1") {
     throw "Unsupported or missing UI image in manifest: $($manifest.uiImage)"
+}
+if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-1") {
+    throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
+}
+foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage)) {
+    if ($requiredImage -notin @($manifest.images)) { throw "Required image is absent from manifest images: $requiredImage" }
 }
 $includesOllama = [bool]$manifest.includesOllama
 $modelArchive = Join-Path $sourcePath "lig-ollama-models.tgz"
@@ -44,6 +50,8 @@ docker load --input $imageArchive
 if ($LASTEXITCODE -ne 0) { throw "docker load failed" }
 docker image inspect $manifest.uiImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Custom UI image was not loaded: $($manifest.uiImage)" }
+docker image inspect $manifest.mcpImage *> $null
+if ($LASTEXITCODE -ne 0) { throw "Management MCP image was not loaded: $($manifest.mcpImage)" }
 
 $secretFile = Join-Path $PSScriptRoot ".env.secret"
 if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
@@ -53,6 +61,10 @@ if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
 $logDirectory = Join-Path $PSScriptRoot "ragflow-logs"
 if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
     New-Item -ItemType Directory -Path $logDirectory | Out-Null
+}
+$mcpDataDirectory = Join-Path $PSScriptRoot "mcp-files"
+if (-not (Test-Path -LiteralPath $mcpDataDirectory -PathType Container)) {
+    New-Item -ItemType Directory -Path $mcpDataDirectory | Out-Null
 }
 
 $previousProfiles = $env:COMPOSE_PROFILES

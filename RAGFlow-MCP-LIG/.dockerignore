@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+tests/
+config/
+*.ps1
+*.md
+.gitignore

@@ -55,6 +55,7 @@ foreach ($bundleFile in $bundleFiles) {
 
 $images = @(
     "lig/ragflow-ui:v0.26.4-1",
+    "lig/ragflow-mcp:v0.26.4-1",
     "infiniflow/ragflow:v0.26.4",
     "infiniflow/infinity:v0.7.0",
     "mysql:8.0.39",
@@ -132,9 +133,10 @@ $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Ob
     [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = $hash.Hash.ToLowerInvariant() }
 }
 $manifest = [pscustomobject]@{
-    bundleFormat = 2
+    bundleFormat = 3
     ragflowVersion = "v0.26.4"
     uiImage = "lig/ragflow-ui:v0.26.4-1"
+    mcpImage = "lig/ragflow-mcp:v0.26.4-1"
     images = @($images)
     includesOllama = [bool]$IncludeOllama
     ollamaModel = if ($IncludeOllama) { "qwen3-embedding:0.6b" } else { $null }

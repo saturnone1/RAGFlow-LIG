@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("config", "pull", "ui-build", "start", "model", "stop", "status", "logs")]
+    [ValidateSet("config", "pull", "build", "ui-build", "mcp-build", "start", "model", "stop", "status", "logs")]
     [string]$Action = "status"
 )
 
@@ -11,11 +11,21 @@ $upstreamEnvFile = Join-Path $dockerDirectory ".env"
 $ligEnvFile = Join-Path $deploymentDirectory ".env.lig"
 $secretFile = Join-Path $deploymentDirectory ".env.secret"
 $logDirectory = Join-Path $deploymentDirectory "ragflow-logs"
+$mcpDataDirectory = Join-Path $deploymentDirectory "mcp-files"
 $uiDockerfile = Join-Path $workspaceDirectory "LIG-UI\Dockerfile"
+$mcpDirectory = Join-Path $workspaceDirectory "RAGFlow-MCP-LIG"
+$mcpDockerfile = Join-Path $mcpDirectory "Dockerfile"
 
 $env:RAGFLOW_UPSTREAM_ENV_FILE = $upstreamEnvFile
 $env:LIG_ENV_FILE = $ligEnvFile
 $env:LIG_LOG_DIRECTORY = $logDirectory
+$env:LIG_MCP_DATA_DIRECTORY = $mcpDataDirectory
+
+foreach ($runtimeDirectory in @($logDirectory, $mcpDataDirectory)) {
+    if (-not (Test-Path -LiteralPath $runtimeDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $runtimeDirectory | Out-Null
+    }
+}
 
 $composeArguments = @(
     "compose",
@@ -53,7 +63,9 @@ switch ($Action) {
     }
     "pull" {
         Assert-FreeSpace
-        Invoke-Compose @("pull")
+        & docker pull "infiniflow/ragflow:v0.26.4"
+        if ($LASTEXITCODE -ne 0) { throw "Official RAGFlow image pull failed" }
+        Invoke-Compose @("pull", "infinity", "mysql", "minio", "redis")
     }
     "ui-build" {
         Assert-FreeSpace
@@ -63,8 +75,32 @@ switch ($Action) {
         }
         Write-Host "Built lig/ragflow-ui:v0.26.4-1"
     }
+    "mcp-build" {
+        Assert-FreeSpace
+        & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE"
+        }
+        Write-Host "Built lig/ragflow-mcp:v0.26.4-1"
+    }
+    "build" {
+        Assert-FreeSpace
+        & docker build --file $uiDockerfile --tag "lig/ragflow-ui:v0.26.4-1" $workspaceDirectory
+        if ($LASTEXITCODE -ne 0) { throw "LIG UI Docker build failed with exit code $LASTEXITCODE" }
+        & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
+        if ($LASTEXITCODE -ne 0) { throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE" }
+        Write-Host "Built LIG UI and management MCP images."
+    }
     "start" {
         Assert-FreeSpace
+        & docker image inspect "lig/ragflow-mcp:v0.26.4-1" *> $null
+        if ($LASTEXITCODE -ne 0) {
+            if (-not (Test-Path -LiteralPath $mcpDockerfile -PathType Leaf)) {
+                throw "Management MCP image is missing and its Dockerfile is unavailable: $mcpDockerfile"
+            }
+            & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
+            if ($LASTEXITCODE -ne 0) { throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE" }
+        }
         Invoke-Compose @("up", "-d", "--remove-orphans")
         Invoke-Compose @("ps")
     }
