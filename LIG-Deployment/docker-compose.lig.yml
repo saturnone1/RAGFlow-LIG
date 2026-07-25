@@ -13,7 +13,7 @@ services:
       RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
     volumes:
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
-    mem_limit: 5g
+    mem_limit: 8g
     logging: *lig-logging
     command:
       - --enable-adminserver
@@ -24,6 +24,7 @@ services:
       - --mcp-base-url=http://127.0.0.1:9380
       - --mcp-script-path=/ragflow/mcp/server/server.py
       - --mcp-mode=self-host
+      - --workers=${TASK_EXECUTOR_WORKERS:-1}
 
   ragflow-mcp-lig:
     image: ${RAGFLOW_MCP_LIG_IMAGE:?Set RAGFLOW_MCP_LIG_IMAGE in LIG-Deployment/.env.lig}
@@ -45,35 +46,35 @@ services:
     networks:
       - ragflow
     restart: unless-stopped
-    mem_limit: 256m
+    mem_limit: 384m
     logging: *lig-logging
 
   infinity:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 1536m
+    mem_limit: 2g
     logging: *lig-logging
 
   mysql:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 1g
+    mem_limit: 1280m
     logging: *lig-logging
 
   minio:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 512m
+    mem_limit: 768m
     logging: *lig-logging
 
   redis:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 192m
+    mem_limit: 256m
     logging: *lig-logging
 
   ollama:

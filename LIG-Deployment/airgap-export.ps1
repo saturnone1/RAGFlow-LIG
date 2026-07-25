@@ -26,6 +26,7 @@ $bundleFiles = @(
     @{ Source = (Join-Path $bundleTemplateDirectory "start.ps1"); Target = "start.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "stop.ps1"); Target = "stop.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "status.ps1"); Target = "status.ps1" },
+    @{ Source = (Join-Path $bundleTemplateDirectory "diagnostics.ps1"); Target = "diagnostics.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "logs.ps1"); Target = "logs.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "README.ko.md"); Target = "README.ko.md" },
     @{ Source = (Join-Path $deploymentDirectory "airgap-import.ps1"); Target = "LIG-Deployment\airgap-import.ps1" },

@@ -22,8 +22,11 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 .\start.ps1
 .\stop.ps1
 .\status.ps1
+.\diagnostics.ps1
 .\logs.ps1
 ```
+
+`diagnostics.ps1`은 비밀값 없이 서비스 health, task executor heartbeat, 컨테이너 자원 스냅숏, 최근 단계별 처리시간과 오류를 JSON으로 출력합니다.
 
 `stop.ps1`은 컨테이너와 네트워크만 정리하며 데이터 볼륨은 삭제하지 않습니다.
 

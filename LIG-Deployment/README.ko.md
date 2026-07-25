@@ -17,8 +17,8 @@
 - 공식 MCP: `http://127.0.0.1:42203/mcp`
 - LIG 관리 MCP: `http://127.0.0.1:42206/mcp`
 - 로그: 컨테이너마다 최대 20 MiB 파일 3개
-- 동시 처리: 문서 1개, 임베딩 배치 4개, worker 8개
-- 메모리: RAGFlow 5 GiB 상한. Ollama 선택 프로필을 사용할 때만 Ollama에 3 GiB 상한 적용
+- 동시 처리: task executor 2개, 문서 bulk 2개, 임베딩 배치 8개, 내부 thread pool 12개
+- 메모리: RAGFlow 8 GiB, Infinity 2 GiB, MySQL 1.25 GiB, MinIO 768 MiB, Valkey 256 MiB 상한. Ollama 선택 프로필은 별도 3 GiB 상한
 
 전체 호스트 포트 배치는 다음과 같습니다. 컨테이너 내부 기본 포트는 바꾸지 않고 Windows 호스트에 공개되는 포트만 정렬했습니다.
 
@@ -76,8 +76,59 @@ NVIDIA API를 사용할 수 없는 에어갭 환경에서는 Ollama 프로필과
 
 ```powershell
 .\lig-ragflow.ps1 status
+.\lig-ragflow.ps1 diagnostics
 .\lig-ragflow.ps1 logs
 ```
+
+`diagnostics`는 비밀값을 출력하지 않고 Compose 서비스 상태, Infinity·MinIO·MySQL·Valkey 상태, task executor heartbeat, 컨테이너 CPU·메모리·I/O 스냅숏, 최근 문서 처리 소요시간 로그와 오류를 JSON으로 출력합니다. heartbeat에는 최근 30분 이내 종료된 컨테이너도 남을 수 있으므로 `CurrentContainer=true`와 `CurrentTaskExecutorHeartbeatCount`를 현재 worker 수 기준으로 사용합니다. 장애나 장시간 처리 분석 시 결과를 파일로 보관할 수 있습니다.
+
+```powershell
+.\lig-ragflow.ps1 diagnostics > diagnostics.json
+```
+
+## 문서 처리 구조와 튜닝
+
+기본 문서 등록 경로는 다음과 같습니다.
+
+```text
+업로드 → Redis 작업 큐 → RAGFlow task executor
+       → 내장 DeepDoc 파서/OCR → 청킹 → 외부 임베딩 → Infinity 인덱싱
+```
+
+upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 LIG 기본 프로파일에는 포함하지 않으며, task executor 프로세스가 RAGFlow 이미지 안의 DeepDoc 모듈을 직접 호출합니다. `DEEPDOC_URL`을 사용한 독립 서비스 운영을 검증하지 않은 상태에서 `deepdoc` 프로파일만 켜도 ingestion이 자동 분리되지는 않습니다.
+
+`TASK_EXECUTOR_WORKERS`는 `.env.lig`에서 조정합니다. 이 배포의 기본값 2는 12개 논리 CPU와 Docker VM 메모리 15 GiB 이상을 기준으로 한 값입니다. 여러 문서 작업의 병렬 처리에는 도움이 되지만, 단일 대형 PDF의 모든 페이지를 같은 비율로 가속한다고 보장할 수 없고 worker별로 파서 모델 메모리가 중복될 수 있습니다. 메모리가 더 작은 배포 대상은 1로 낮추고, 더 늘릴 때는 실제 문서 묶음으로 처리량과 메모리를 함께 확인하십시오.
+
+Ollama 프로필까지 동시에 실행하면 컨테이너 메모리 상한 합계가 Docker VM 할당량에 가까워집니다. 로컬 Ollama를 사용할 때는 Docker VM 메모리를 늘리거나 `TASK_EXECUTOR_WORKERS=1`로 낮춰 메모리 여유를 확보하십시오.
+
+```dotenv
+TASK_EXECUTOR_WORKERS=2
+DOC_BULK_SIZE=2
+EMBEDDING_BATCH_SIZE=8
+```
+
+설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`는 worker·bulk·batch 값의 범위를 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
+
+1. `diagnostics`의 task executor heartbeat 수가 설정값과 일치하는지 확인합니다.
+2. UI의 문서 처리 상세에서 현재 단계와 실제 `process_duration`을 확인합니다.
+3. 진단 결과의 `RecentStageTimings`에서 `Chunk doc`, `Indexing doc`, 전체 `Done` 소요시간을 비교합니다.
+4. `ContainerStats`의 CPU·메모리·Block I/O와 `Health`의 응답시간을 함께 봅니다.
+
+현재 v0.26.4 프런트엔드는 자체적으로 잔여시간을 계산하지 않습니다. API의 진행률, `progress_msg`, 시작 시각과 실제 경과시간을 표시하므로 “7시간” 같은 값이 보이면 해당 화면·API 응답을 먼저 확인해야 합니다. 초기 일부 페이지를 근거로 한 임의 ETA 보정 로직은 추가하지 않았습니다.
+
+문서 유형별 권장 파서 정책은 다음과 같습니다.
+
+| 문서 유형 | 우선 전략 |
+| --- | --- |
+| 텍스트 선택이 가능한 일반 PDF | 일반 파서로 시작하고 결과 품질 확인 |
+| 스캔 PDF | OCR이 포함된 DeepDoc 경로 사용 |
+| 표·다단 편집이 중요한 PDF | 레이아웃·표 분석을 켜고 샘플 품질/시간 비교 |
+| 복잡한 보고서·논문 | Docling/MinerU를 별도 검증한 후 데이터셋 단위 선택 |
+| 이미지·도면 의미 분석 | VLM을 명시적으로 등록하고 필요한 데이터셋에만 적용 |
+
+파서나 embedding 모델을 바꾸면 기존 벡터와 새 벡터를 섞지 마십시오. embedding 차원과 의미 공간이 달라질 수 있으므로 해당 데이터셋은 재인덱싱하거나 새 데이터셋으로 검증해야 합니다.
+
+이 배포는 Infinity를 사용하므로 Elasticsearch heap/health 명령은 적용 대상이 아닙니다. 외부 NVIDIA embedding은 온라인 환경용이고, 폐쇄망에서는 내부 vLLM의 생성 모델과 별개로 Ollama 또는 사내 OpenAI 호환 embedding endpoint를 등록합니다. 생성 LLM과 embedding 모델의 역할은 서로 대체되지 않습니다.
 
 `stop`은 컨테이너와 네트워크만 제거하며 데이터 볼륨은 삭제하지 않습니다.
 

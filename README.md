@@ -5,3 +5,5 @@
 - `LIG-Deployment/`: local Docker Compose overlay, environment files, and air-gap scripts
 
 RAGFlow is started from `LIG-Deployment/lig-ragflow.ps1` while the upstream source remains isolated under `RAGFlow/`.
+
+Deployment, document-processing architecture, parser policy, worker tuning, and diagnostics are documented in [`LIG-Deployment/README.ko.md`](LIG-Deployment/README.ko.md). Run `./LIG-Deployment/lig-ragflow.ps1 diagnostics` to collect a redacted operational report.
