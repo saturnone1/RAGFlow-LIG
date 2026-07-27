@@ -11,10 +11,16 @@ services:
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
       RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      PADDLEOCR_BASE_URL: http://paddleocr:8080
+      PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_ALGORITHM: PP-OCRv5
     volumes:
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
-    mem_limit: 8g
     logging: *lig-logging
+    networks:
+      ragflow:
+        aliases:
+          - ragflow-runtime
     command:
       - --enable-adminserver
       - --init-model-provider-tables
@@ -25,14 +31,105 @@ services:
       - --mcp-script-path=/ragflow/mcp/server/server.py
       - --mcp-mode=self-host
       - --workers=${TASK_EXECUTOR_WORKERS:-1}
+    depends_on:
+      paddleocr-cpu:
+        condition: service_healthy
+
+  ragflow-gpu:
+    env_file:
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
+    environment:
+      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      PADDLEOCR_BASE_URL: http://paddleocr:8080
+      PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_ALGORITHM: PP-OCRv5
+    volumes:
+      - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
+    logging: *lig-logging
+    networks:
+      ragflow:
+        aliases:
+          - ragflow-runtime
+    ports:
+      - ${GO_HTTP_PORT:?Set GO_HTTP_PORT in LIG-Deployment/.env.lig}:9384
+      - ${GO_ADMIN_PORT:?Set GO_ADMIN_PORT in LIG-Deployment/.env.lig}:9383
+    command:
+      - --enable-adminserver
+      - --init-model-provider-tables
+      - --enable-mcpserver
+      - --mcp-host=0.0.0.0
+      - --mcp-port=9382
+      - --mcp-base-url=http://127.0.0.1:9380
+      - --mcp-script-path=/ragflow/mcp/server/server.py
+      - --mcp-mode=self-host
+      - --workers=${TASK_EXECUTOR_WORKERS:-1}
+    depends_on:
+      paddleocr-gpu:
+        condition: service_healthy
+
+  paddleocr-cpu:
+    profiles:
+      - cpu
+    image: ${PADDLEOCR_IMAGE:?Set PADDLEOCR_IMAGE in LIG-Deployment/.env.lig}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file:
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
+    environment:
+      PADDLEOCR_DEVICE: cpu
+      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_INTERNAL_BASE_URL: http://paddleocr:8080
+      PADDLEOCR_JOB_WORKERS: ${PADDLEOCR_JOB_WORKERS:-1}
+    ports:
+      - ${PADDLEOCR_PORT:?Set PADDLEOCR_PORT in LIG-Deployment/.env.lig}:8080
+    networks:
+      ragflow:
+        aliases:
+          - paddleocr
+    restart: unless-stopped
+    logging: *lig-logging
+
+  paddleocr-gpu:
+    profiles:
+      - gpu
+    image: ${PADDLEOCR_IMAGE:?Set PADDLEOCR_IMAGE in LIG-Deployment/.env.lig}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file:
+      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
+      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
+    environment:
+      PADDLEOCR_DEVICE: gpu
+      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_INTERNAL_BASE_URL: http://paddleocr:8080
+      PADDLEOCR_JOB_WORKERS: ${PADDLEOCR_JOB_WORKERS:-1}
+    ports:
+      - ${PADDLEOCR_PORT:?Set PADDLEOCR_PORT in LIG-Deployment/.env.lig}:8080
+    networks:
+      ragflow:
+        aliases:
+          - paddleocr
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging: *lig-logging
 
   ragflow-mcp-lig:
     image: ${RAGFLOW_MCP_LIG_IMAGE:?Set RAGFLOW_MCP_LIG_IMAGE in LIG-Deployment/.env.lig}
     depends_on:
-      ragflow-cpu:
-        condition: service_started
+      mysql:
+        condition: service_healthy
     environment:
-      RAGFLOW_BASE_URL: http://ragflow-cpu:9380
+      RAGFLOW_BASE_URL: http://ragflow-runtime:9380
       RAGFLOW_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
       RAGFLOW_WRITES_ENABLED: "true"
       RAGFLOW_FILE_WRITES_ENABLED: "false"
@@ -46,54 +143,81 @@ services:
     networks:
       - ragflow
     restart: unless-stopped
-    mem_limit: 384m
     logging: *lig-logging
 
   infinity:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 2g
+    # The upstream Compose applies MEM_LIMIT to Infinity. Resource sizing belongs
+    # to the host/Docker runtime in the LIG deployment, so remove that hard cap.
+    mem_limit: !reset null
     logging: *lig-logging
 
   mysql:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 1280m
     logging: *lig-logging
 
   minio:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 768m
     logging: *lig-logging
 
   redis:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    mem_limit: 256m
     logging: *lig-logging
 
-  ollama:
+  qwen3-embedding-tei:
     profiles:
-      - ollama
-    image: ${OLLAMA_IMAGE}
-    ports:
-      - ${OLLAMA_PORT}:11434
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_KEEP_ALIVE: 10m
+      - embedding-cpu
+    image: ${QWEN3_EMBEDDING_IMAGE:?Set QWEN3_EMBEDDING_IMAGE in LIG-Deployment/.env.lig}
+    command:
+      - --model-id
+      - /model
+      - --served-model-name
+      - Qwen/Qwen3-Embedding-0.6B
+      - --port
+      - "80"
+      - --dtype
+      - float16
+      - --tokenization-workers
+      - "2"
+      - --max-batch-tokens
+      - "2048"
+      - --auto-truncate
+      - --json-output
     networks:
       - ragflow
     restart: unless-stopped
-    mem_limit: 3g
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 20
     logging: *lig-logging
 
-volumes:
-  ollama_data:
-    driver: local
+  qwen3-embedding:
+    profiles:
+      - embedding-cpu
+    image: ${QWEN3_EMBEDDING_ADAPTER_IMAGE:?Set QWEN3_EMBEDDING_ADAPTER_IMAGE in LIG-Deployment/.env.lig}
+    depends_on:
+      qwen3-embedding-tei:
+        condition: service_healthy
+    environment:
+      EMBEDDING_UPSTREAM_URL: http://qwen3-embedding-tei:80
+      EMBEDDING_ADAPTER_PORT: "8080"
+      EMBEDDING_QUERY_INSTRUCTION: ${QWEN3_QUERY_INSTRUCTION:-Given a user question, retrieve relevant passages from internal company documents that answer the question}
+    ports:
+      - ${QWEN3_EMBEDDING_PORT:?Set QWEN3_EMBEDDING_PORT in LIG-Deployment/.env.lig}:8080
+    networks:
+      ragflow:
+        aliases:
+          - qwen3-embedding
+    restart: unless-stopped
+    logging: *lig-logging

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("config", "pull", "build", "ui-build", "mcp-build", "start", "model", "stop", "status", "diagnostics", "logs")]
+    [ValidateSet("config", "pull", "build", "ui-build", "mcp-build", "ocr-build", "embedding-build", "embedding-start", "embedding-stop", "embedding-status", "embedding-test", "start", "stop", "status", "diagnostics", "logs")]
     [string]$Action = "status"
 )
 
@@ -15,6 +15,11 @@ $mcpDataDirectory = Join-Path $deploymentDirectory "mcp-files"
 $uiDockerfile = Join-Path $workspaceDirectory "LIG-UI\Dockerfile"
 $mcpDirectory = Join-Path $workspaceDirectory "RAGFlow-MCP-LIG"
 $mcpDockerfile = Join-Path $mcpDirectory "Dockerfile"
+$ocrDirectory = Join-Path $workspaceDirectory "LIG-PaddleOCR"
+$ocrDockerfile = Join-Path $ocrDirectory "Dockerfile"
+$embeddingDirectory = Join-Path $workspaceDirectory "LIG-Embedding"
+$embeddingModelDockerfile = Join-Path $embeddingDirectory "Dockerfile.model"
+$embeddingAdapterDockerfile = Join-Path $embeddingDirectory "Dockerfile.adapter"
 
 $env:RAGFLOW_UPSTREAM_ENV_FILE = $upstreamEnvFile
 $env:LIG_ENV_FILE = $ligEnvFile
@@ -78,19 +83,15 @@ function Assert-LigConfiguration {
     $configuration = Get-EnvFileValues $ligEnvFile
     $workerValue = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "1"
     $workers = 0
-    if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1 -or $workers -gt 16) {
-        throw "TASK_EXECUTOR_WORKERS must be an integer between 1 and 16. Current value: $workerValue"
+    if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1) {
+        throw "TASK_EXECUTOR_WORKERS must be a positive integer. Current value: $workerValue"
     }
-    foreach ($setting in @(
-        @{ Name = "DOC_BULK_SIZE"; Minimum = 1; Maximum = 64 },
-        @{ Name = "EMBEDDING_BATCH_SIZE"; Minimum = 1; Maximum = 256 },
-        @{ Name = "THREAD_POOL_MAX_WORKERS"; Minimum = 1; Maximum = 256 }
-    )) {
-        $settingValue = Get-ConfigurationValue $configuration $setting.Name
-        if ($null -eq $settingValue) { continue }
+    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS")) {
+        $settingValue = Get-ConfigurationValue $configuration $settingName
+        if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
         $parsed = 0
-        if (-not [int]::TryParse($settingValue, [ref]$parsed) -or $parsed -lt $setting.Minimum -or $parsed -gt $setting.Maximum) {
-            throw "$($setting.Name) must be between $($setting.Minimum) and $($setting.Maximum). Current value: $settingValue"
+        if (-not [int]::TryParse($settingValue, [ref]$parsed) -or $parsed -lt 1) {
+            throw "$settingName must be a positive integer. Current value: $settingValue"
         }
     }
 }
@@ -107,7 +108,12 @@ function Invoke-Diagnostics {
     $configuration = Get-EnvFileValues $ligEnvFile
     $secrets = Get-EnvFileValues $secretFile
     $apiKey = $secrets["RAGFLOW_MCP_API_KEY"]
-    $apiBase = "http://127.0.0.1:42201"
+    $apiBinding = Get-ConfigurationValue $configuration "SVR_HTTP_PORT" "127.0.0.1:42301"
+    $apiPort = ($apiBinding -split ':')[-1]
+    if ($apiPort -notmatch '^\d+$') {
+        throw "SVR_HTTP_PORT must end with a numeric port. Current value: $apiBinding"
+    }
+    $apiBase = "http://127.0.0.1:$apiPort"
     $serviceHealth = $null
     $apiError = $null
     $dockerServerVersion = (& docker version --format '{{.Server.Version}}' 2>$null)
@@ -136,7 +142,7 @@ function Invoke-Diagnostics {
 
     $timingSamples = @()
     $recentErrors = @()
-    $ragflowContainer = $containerNames | Where-Object { $_ -match 'ragflow-cpu' } | Select-Object -First 1
+    $ragflowContainer = $containerNames | Where-Object { $_ -match 'ragflow-(cpu|gpu)' } | Select-Object -First 1
     $ragflowHostname = $null
     if ($ragflowContainer) {
         $ragflowHostname = (& docker inspect --format '{{.Config.Hostname}}' $ragflowContainer 2>$null)
@@ -173,7 +179,8 @@ function Invoke-Diagnostics {
             EmbeddingBatchSize = Get-ConfigurationValue $configuration "EMBEDDING_BATCH_SIZE"
             ThreadPoolWorkers = Get-ConfigurationValue $configuration "THREAD_POOL_MAX_WORKERS"
             DoclingEnabled = Get-ConfigurationValue $configuration "USE_DOCLING"
-            EmbeddingMode = if ((Get-ConfigurationValue $configuration "COMPOSE_PROFILES") -match 'ollama') { "ollama profile" } else { "configured in RAGFlow (external provider)" }
+            EmbeddingMode = if ($containerNames -contains "lig-ragflow-qwen3-embedding-1") { "optional Qwen3 TEI CPU service" } else { "configured in RAGFlow (external provider)" }
+            KoreanOcr = "PP-OCRv5 (CPU/GPU follows DEVICE)"
             StandaloneDeepDocEnabled = ((Get-ConfigurationValue $configuration "COMPOSE_PROFILES") -split ',' -contains 'deepdoc')
         }
         Services = $composeRows | Select-Object Name, Service, State, Health, Status, Ports
@@ -222,13 +229,35 @@ switch ($Action) {
         }
         Write-Host "Built lig/ragflow-mcp:v0.26.4-1"
     }
+    "ocr-build" {
+        Assert-FreeSpace
+        & docker build --file $ocrDockerfile --tag "lig/paddleocr-ko:v0.26.4-1" $ocrDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "LIG Korean PaddleOCR Docker build failed with exit code $LASTEXITCODE"
+        }
+        Write-Host "Built lig/paddleocr-ko:v0.26.4-1"
+    }
+    "embedding-build" {
+        Assert-FreeSpace
+        & docker build --file $embeddingModelDockerfile --tag "lig/qwen3-embedding-tei:0.6b-1" $embeddingDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "Qwen3 TEI model image build failed with exit code $LASTEXITCODE"
+        }
+        & docker build --file $embeddingAdapterDockerfile --tag "lig/qwen3-embedding-adapter:0.6b-1" $embeddingDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "Qwen3 embedding adapter image build failed with exit code $LASTEXITCODE"
+        }
+        Write-Host "Built Qwen3 Embedding 0.6B TEI CPU and query adapter images."
+    }
     "build" {
         Assert-FreeSpace
         & docker build --file $uiDockerfile --tag "lig/ragflow-ui:v0.26.4-1" $workspaceDirectory
         if ($LASTEXITCODE -ne 0) { throw "LIG UI Docker build failed with exit code $LASTEXITCODE" }
         & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
         if ($LASTEXITCODE -ne 0) { throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE" }
-        Write-Host "Built LIG UI and management MCP images."
+        & docker build --file $ocrDockerfile --tag "lig/paddleocr-ko:v0.26.4-1" $ocrDirectory
+        if ($LASTEXITCODE -ne 0) { throw "LIG Korean PaddleOCR Docker build failed with exit code $LASTEXITCODE" }
+        Write-Host "Built LIG UI, management MCP, and Korean PaddleOCR images."
     }
     "start" {
         Assert-LigConfiguration
@@ -241,15 +270,60 @@ switch ($Action) {
             & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
             if ($LASTEXITCODE -ne 0) { throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE" }
         }
+        & docker image inspect "lig/paddleocr-ko:v0.26.4-1" *> $null
+        if ($LASTEXITCODE -ne 0) {
+            if (-not (Test-Path -LiteralPath $ocrDockerfile -PathType Leaf)) {
+                throw "Korean PaddleOCR image is missing and its Dockerfile is unavailable: $ocrDockerfile"
+            }
+            & docker build --file $ocrDockerfile --tag "lig/paddleocr-ko:v0.26.4-1" $ocrDirectory
+            if ($LASTEXITCODE -ne 0) { throw "LIG Korean PaddleOCR Docker build failed with exit code $LASTEXITCODE" }
+        }
         Invoke-Compose @("up", "-d", "--remove-orphans")
         Invoke-Compose @("ps")
     }
-    "model" {
+    "embedding-start" {
         Assert-FreeSpace
-        $model = if ($env:OLLAMA_EMBEDDING_MODEL) { $env:OLLAMA_EMBEDDING_MODEL } else { "qwen3-embedding:0.6b" }
-        Invoke-Compose @("--profile", "ollama", "up", "-d", "ollama")
-        Invoke-Compose @("--profile", "ollama", "exec", "ollama", "ollama", "pull", $model)
-        Invoke-Compose @("--profile", "ollama", "exec", "ollama", "ollama", "show", $model)
+        foreach ($image in @("lig/qwen3-embedding-tei:0.6b-1", "lig/qwen3-embedding-adapter:0.6b-1")) {
+            & docker image inspect $image *> $null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Optional embedding image is missing: $image. Run embedding-build or import the air-gap bundle first."
+            }
+        }
+        Invoke-Compose @("--profile", "embedding-cpu", "up", "-d", "qwen3-embedding-tei", "qwen3-embedding")
+        Invoke-Compose @("--profile", "embedding-cpu", "ps", "qwen3-embedding-tei", "qwen3-embedding")
+    }
+    "embedding-stop" {
+        Invoke-Compose @("--profile", "embedding-cpu", "stop", "qwen3-embedding", "qwen3-embedding-tei")
+    }
+    "embedding-status" {
+        Invoke-Compose @("--profile", "embedding-cpu", "ps", "qwen3-embedding-tei", "qwen3-embedding")
+    }
+    "embedding-test" {
+        $configuration = Get-EnvFileValues $ligEnvFile
+        $binding = Get-ConfigurationValue $configuration "QWEN3_EMBEDDING_PORT" "127.0.0.1:42317"
+        $port = ($binding -split ':')[-1]
+        if ($port -notmatch '^\d+$') { throw "QWEN3_EMBEDDING_PORT must end with a numeric port. Current value: $binding" }
+        $baseUrl = "http://127.0.0.1:$port"
+        $health = $null
+        for ($attempt = 1; $attempt -le 12; $attempt++) {
+            try {
+                $health = Invoke-RestMethod -Uri "$baseUrl/health" -TimeoutSec 10
+                if ($health.status -eq "ok") { break }
+            }
+            catch {
+                if ($attempt -eq 12) { throw }
+            }
+            Start-Sleep -Seconds 5
+        }
+        if ($health.status -ne "ok" -or $health.model -ne "Qwen/Qwen3-Embedding-0.6B") {
+            throw "Unexpected embedding health response."
+        }
+        $body = @{ inputs = @("국방 문서 검색 시험", "defense document retrieval test") } | ConvertTo-Json -Compress
+        $vectors = Invoke-RestMethod -Uri "$baseUrl/embed" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 120
+        if (@($vectors).Count -ne 2 -or @($vectors[0]).Count -ne 1024 -or @($vectors[1]).Count -ne 1024) {
+            throw "Embedding response must contain two 1024-dimensional vectors."
+        }
+        Write-Host "Qwen3 embedding health and 1024-dimensional batch inference passed."
     }
     "stop" { Invoke-Compose @("down") }
     "status" {

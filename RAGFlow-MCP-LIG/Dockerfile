@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS build
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim@sha256:3c0edbfe1549dd93fb789dc96299a40df865ad7bffefcaf38e8c05940686d641 AS build
 
 WORKDIR /src
 COPY src/RagFlowMcp.csproj ./
@@ -10,7 +10,7 @@ RUN dotnet publish RagFlowMcp.csproj \
     --output /app/publish \
     /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim@sha256:8f6a307ae32fb393a4b4bcde0a81f0ce3f0a715de0e5575df71f3030448f2dde AS runtime
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends curl \

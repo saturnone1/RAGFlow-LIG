@@ -1,6 +1,6 @@
 param(
-    [string]$McpUrl = "http://127.0.0.1:42206/mcp",
-    [string]$HealthUrl = "http://127.0.0.1:42206/healthz",
+    [string]$McpUrl = "http://127.0.0.1:42306/mcp",
+    [string]$HealthUrl = "http://127.0.0.1:42306/healthz",
     [string]$ApiKey = $env:RAGFLOW_API_KEY,
     [switch]$GenericUpload
 )
@@ -35,7 +35,7 @@ function ConvertFrom-Mcp([string]$Content) {
 }
 
 $health = Invoke-RestMethod $HealthUrl -TimeoutSec 5
-if ($health.status -ne "ok" -or $health.ragflowBaseUrl -ne "http://ragflow-cpu:9380") { throw "Compose MCP health check failed" }
+if ($health.status -ne "ok" -or $health.ragflowBaseUrl -ne "http://ragflow-runtime:9380") { throw "Compose MCP health check failed" }
 
 try {
     Invoke-Mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"compose-unauthenticated-test","version":"1"}}}' "" -WithoutAuthentication | Out-Null

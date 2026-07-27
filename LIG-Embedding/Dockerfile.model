@@ -1,0 +1,23 @@
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS downloader
+
+ARG MODEL_ID=Qwen/Qwen3-Embedding-0.6B
+ARG MODEL_REVISION=97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3
+
+RUN pip install --no-cache-dir huggingface_hub==0.34.4
+COPY download_model.py /tmp/download_model.py
+RUN python /tmp/download_model.py \
+    --model-id "${MODEL_ID}" \
+    --revision "${MODEL_REVISION}" \
+    --output /model
+
+FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.9@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07
+
+COPY --from=downloader /model /model
+
+LABEL org.opencontainers.image.title="LIG Qwen3 Embedding 0.6B (TEI CPU)" \
+      org.opencontainers.image.source="https://huggingface.co/Qwen/Qwen3-Embedding-0.6B" \
+      org.opencontainers.image.revision="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      ai.lig.model.safetensors.sha256="0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"
+
+CMD ["--model-id", "/model", "--served-model-name", "Qwen/Qwen3-Embedding-0.6B", "--port", "80", "--dtype", "float16", "--tokenization-workers", "2", "--max-batch-tokens", "2048", "--auto-truncate", "--json-output"]

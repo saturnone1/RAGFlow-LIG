@@ -1,5 +1,5 @@
 param(
-    [string]$BaseUrl = "http://127.0.0.1:42201",
+    [string]$BaseUrl = "http://127.0.0.1:42301",
     [string]$ApiKey = $env:RAGFLOW_API_KEY,
     [switch]$Crud,
     [switch]$GenericUpload,

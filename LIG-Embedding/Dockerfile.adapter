@@ -1,0 +1,14 @@
+FROM python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0
+
+WORKDIR /app
+COPY adapter.py /app/adapter.py
+
+ENV EMBEDDING_UPSTREAM_URL=http://qwen3-embedding-tei:80 \
+    EMBEDDING_ADAPTER_PORT=8080 \
+    EMBEDDING_QUERY_INSTRUCTION="Given a user question, retrieve relevant passages from internal company documents that answer the question"
+
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=10 \
+  CMD wget -q -O - http://127.0.0.1:8080/health >/dev/null || exit 1
+
+ENTRYPOINT ["python", "/app/adapter.py"]

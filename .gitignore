@@ -1,3 +1,5 @@
 LIG-Deployment/.env.secret
 LIG-Deployment/ragflow-logs/
 LIG-Deployment/mcp-files/
+__pycache__/
+*.py[cod]

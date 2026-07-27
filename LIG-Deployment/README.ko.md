@@ -5,43 +5,47 @@
 ## 선택한 구성
 
 - 문서 엔진: Elasticsearch 대신 Infinity
-- 실행 장치: CPU
-- 내부 서비스: RAGFlow, LIG 관리 MCP, Infinity, MySQL, MinIO, Valkey. Ollama는 선택 사항
-- 기본 임베딩: NVIDIA 공개 API의 `nvidia/llama-nemotron-embed-vl-1b-v2`
-- 에어갭 대체 임베딩: Ollama의 다국어 `qwen3-embedding:0.6b`(양자화 모델 약 639 MB)
-- 제외: Kibana, Sandbox, TEI, 별도 Docling 서비스
+- 실행 장치: 로컬 기본 CPU, 에어갭 번들은 NVIDIA DeepDoc GPU 설치도 지원
+- 한국어 OCR: CPU/GPU 프로필에 `korean_PP-OCRv5_mobile_rec` 모델을 포함한 내부 PaddleOCR 서비스 자동 실행
+- 내부 서비스: RAGFlow, 한국어 PaddleOCR, LIG 관리 MCP, Infinity, MySQL, MinIO, Valkey
+- 온라인 임베딩 선택지: NVIDIA 공개 API의 `nvidia/llama-nemotron-embed-vl-1b-v2`
+- 선택 설치 임베딩: TEI CPU 기반 `Qwen/Qwen3-Embedding-0.6B`(1024차원, 모델과 런타임을 별도 에어갭 아카이브에 포함)
+- 제외: Kibana, Sandbox, 별도 Docling 서비스
 - 포트: 모두 `127.0.0.1`에만 공개
-- 포트 블록: 기존 MCP 서버의 `42180`~`42198` 다음 대역인 `42200`~`42215`
-- 웹 UI: `http://127.0.0.1:42200`
-- REST API: `http://127.0.0.1:42201`
-- 공식 MCP: `http://127.0.0.1:42203/mcp`
-- LIG 관리 MCP: `http://127.0.0.1:42206/mcp`
+- 포트 블록: 다른 로컬 MCP 서버와 분리한 `42300`~`42317`
+- 웹 UI: `http://127.0.0.1:42300`
+- REST API: `http://127.0.0.1:42301`
+- 공식 MCP: `http://127.0.0.1:42303/mcp`
+- LIG 관리 MCP: `http://127.0.0.1:42306/mcp`
+- 한국어 PaddleOCR 상태: `http://127.0.0.1:42316/health`
+- 선택형 Qwen3 임베딩 상태: `http://127.0.0.1:42317/health`
 - 로그: 컨테이너마다 최대 20 MiB 파일 3개
-- 동시 처리: task executor 2개, 문서 bulk 2개, 임베딩 배치 8개, 내부 thread pool 12개
-- 메모리: RAGFlow 8 GiB, Infinity 2 GiB, MySQL 1.25 GiB, MinIO 768 MiB, Valkey 256 MiB 상한. Ollama 선택 프로필은 별도 3 GiB 상한
+- 동시 처리: CPU는 task executor 2개, 12 GiB GPU 설치는 모델 중복 적재를 피하도록 executor 1개
+- 자원: Compose에서 컨테이너별 CPU·시스템 RAM 상한을 두지 않으며, upstream Infinity의 RAM 상한도 LIG 오버레이에서 해제. Docker Engine 또는 서버 운영 정책의 전체 자원 범위를 사용
 
 전체 호스트 포트 배치는 다음과 같습니다. 컨테이너 내부 기본 포트는 바꾸지 않고 Windows 호스트에 공개되는 포트만 정렬했습니다.
 
 | 포트 | 서비스 |
 | --- | --- |
-| `42200` | LIG 웹 UI |
-| `42201` | RAGFlow REST API |
-| `42202` | RAGFlow Admin API |
-| `42203` | RAGFlow 공식 MCP |
-| `42204` | Go Admin |
-| `42205` | Go HTTP |
-| `42206` | LIG 관리 MCP |
-| `42207` | LIG 웹 HTTPS |
-| `42208` | MySQL |
-| `42209` | MinIO API |
-| `42210` | MinIO Console |
-| `42211` | Valkey/Redis |
-| `42212` | Infinity Thrift |
-| `42213` | Infinity HTTP |
-| `42214` | Infinity PostgreSQL 호환 포트 |
-| `42215` | 선택 사항인 Ollama |
+| `42300` | LIG 웹 UI |
+| `42301` | RAGFlow REST API |
+| `42302` | RAGFlow Admin API |
+| `42303` | RAGFlow 공식 MCP |
+| `42304` | Go Admin |
+| `42305` | Go HTTP |
+| `42306` | LIG 관리 MCP |
+| `42307` | LIG 웹 HTTPS |
+| `42308` | MySQL |
+| `42309` | MinIO API |
+| `42310` | MinIO Console |
+| `42311` | Valkey/Redis |
+| `42312` | Infinity Thrift |
+| `42313` | Infinity HTTP |
+| `42314` | Infinity PostgreSQL 호환 포트 |
+| `42316` | 한국어 PaddleOCR API |
+| `42317` | 선택형 Qwen3 임베딩 API |
 
-`LIG-Deployment/.env.lig`는 upstream 기본값을 덮어쓰고, `LIG-Deployment/docker-compose.lig.yml`은 메모리와 로그 상한을 추가합니다. 공식 소스와 Compose는 `RAGFlow/` 아래에 원본 그대로 유지되며, 데이터는 named volume에 저장되므로 컨테이너를 다시 만들어도 유지됩니다.
+`LIG-Deployment/.env.lig`는 upstream 기본값을 덮어쓰고, `LIG-Deployment/docker-compose.lig.yml`은 로그 크기 상한과 LIG 서비스 구성을 추가합니다. 컨테이너별 CPU·시스템 RAM 상한은 두지 않습니다. 로그 회전 상한은 디스크 고갈 방지 설정이므로 유지합니다. 공식 소스와 Compose는 `RAGFlow/` 아래에 원본 그대로 유지되며, 데이터는 named volume에 저장되므로 컨테이너를 다시 만들어도 유지됩니다.
 
 ## 실행
 
@@ -66,11 +70,15 @@ RAGFlow UI에서 **설정 → 모델 공급자 → NVIDIA**를 열어 다음 임
 
 NVIDIA API 키는 Compose 파일이나 저장소에 기록하지 않고 RAGFlow UI의 공급자 자격증명에만 입력합니다. NVIDIA 공개 API를 사용하려면 RAGFlow 컨테이너에서 `integrate.api.nvidia.com`으로 HTTPS 통신할 수 있어야 합니다.
 
-NVIDIA API를 사용할 수 없는 에어갭 환경에서는 Ollama 프로필과 모델을 다음 명령으로 시작합니다.
+로컬 Qwen3 임베딩은 기본 설치와 별도로 다음 명령으로 빌드하고 시작합니다. 기본 `start`는 이 선택 서비스를 자동으로 추가하지 않습니다.
 
 ```powershell
-.\lig-ragflow.ps1 model
+.\lig-ragflow.ps1 embedding-build
+.\lig-ragflow.ps1 embedding-start
+.\lig-ragflow.ps1 embedding-test
 ```
+
+RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Base URL `http://qwen3-embedding:8080`, 유형 `Embedding`, 최대 토큰 `2048`로 등록합니다. Docker 호스트에서 직접 시험할 때만 `http://127.0.0.1:42317`을 사용합니다. CPU 추론이 LIG 이미지의 60초 공급자 요청 제한시간 안에 끝나도록 `.env.lig`의 `EMBEDDING_BATCH_SIZE=2`를 사용합니다. 이는 한 요청에 묶는 청크 수일 뿐 CPU·RAM 상한이 아닙니다.
 
 상태와 로그는 다음처럼 확인합니다.
 
@@ -97,17 +105,19 @@ NVIDIA API를 사용할 수 없는 에어갭 환경에서는 Ollama 프로필과
 
 upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 LIG 기본 프로파일에는 포함하지 않으며, task executor 프로세스가 RAGFlow 이미지 안의 DeepDoc 모듈을 직접 호출합니다. `DEEPDOC_URL`을 사용한 독립 서비스 운영을 검증하지 않은 상태에서 `deepdoc` 프로파일만 켜도 ingestion이 자동 분리되지는 않습니다.
 
-`TASK_EXECUTOR_WORKERS`는 `.env.lig`에서 조정합니다. 이 배포의 기본값 2는 12개 논리 CPU와 Docker VM 메모리 15 GiB 이상을 기준으로 한 값입니다. 여러 문서 작업의 병렬 처리에는 도움이 되지만, 단일 대형 PDF의 모든 페이지를 같은 비율로 가속한다고 보장할 수 없고 worker별로 파서 모델 메모리가 중복될 수 있습니다. 메모리가 더 작은 배포 대상은 1로 낮추고, 더 늘릴 때는 실제 문서 묶음으로 처리량과 메모리를 함께 확인하십시오.
+한국어 스캔 PDF에는 별도 `paddleocr-cpu` 또는 `paddleocr-gpu` 서비스가 자동 실행됩니다. 이 서비스는 한국어·영어·숫자를 지원하는 PP-OCRv5 한국어 모델을 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 파일 크기나 페이지 수를 임의로 제한하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. PaddleOCR 데이터셋은 PDF 전체를 단일 RAGFlow 작업으로 구성하여 페이지 작업마다 같은 PDF를 다시 OCR하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되며 데이터셋 화면에서 별도로 입력하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
 
-Ollama 프로필까지 동시에 실행하면 컨테이너 메모리 상한 합계가 Docker VM 할당량에 가까워집니다. 로컬 Ollama를 사용할 때는 Docker VM 메모리를 늘리거나 `TASK_EXECUTOR_WORKERS=1`로 낮춰 메모리 여유를 확보하십시오.
+DeepDOC는 삭제하지 않습니다. DeepDOC는 OCR뿐 아니라 레이아웃, 표, 좌표와 이미지 영역을 처리하며 영어·중국어 문서 및 복잡한 편집 문서에서 여전히 별도 가치가 있습니다. 한국어 스캔 문서에서는 DeepDOC 문자 사전에 한글이 없어 PaddleOCR를 사용합니다.
+
+`TASK_EXECUTOR_WORKERS`는 `.env.lig`에서 조정합니다. CPU 설치의 초기값은 2이며 Compose가 CPU나 시스템 RAM 사용량을 제한하지는 않습니다. 여러 문서 작업의 병렬 처리에는 도움이 되지만, 단일 대형 PDF의 모든 페이지를 같은 비율로 가속한다고 보장할 수 없고 worker별로 파서 모델 메모리가 중복될 수 있습니다. 실제 서버와 문서 묶음으로 처리량과 메모리를 확인하면서 조정하십시오.
+
+선택형 Qwen3 TEI CPU 서비스는 현재 설정에서 유휴 메모리 약 1.5 GiB를 추가로 사용합니다. Docker VM 메모리가 부족하면 `TASK_EXECUTOR_WORKERS=1`로 낮추거나 임베딩 서비스를 별도 서버에서 운영하십시오. Compose는 시스템 RAM 상한을 강제로 설정하지 않습니다.
 
 ```dotenv
 TASK_EXECUTOR_WORKERS=2
-DOC_BULK_SIZE=2
-EMBEDDING_BATCH_SIZE=8
 ```
 
-설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`는 worker·bulk·batch 값의 범위를 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
+문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로는 LIG 이미지의 60초 공급자 요청 제한을 기준으로 embedding batch를 2로 설정합니다. 요청 단위 조정이며 자원 상한은 아닙니다. 설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`는 값이 양의 정수인지 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
 
 1. `diagnostics`의 task executor heartbeat 수가 설정값과 일치하는지 확인합니다.
 2. UI의 문서 처리 상세에서 현재 단계와 실제 `process_duration`을 확인합니다.
@@ -128,7 +138,7 @@ EMBEDDING_BATCH_SIZE=8
 
 파서나 embedding 모델을 바꾸면 기존 벡터와 새 벡터를 섞지 마십시오. embedding 차원과 의미 공간이 달라질 수 있으므로 해당 데이터셋은 재인덱싱하거나 새 데이터셋으로 검증해야 합니다.
 
-이 배포는 Infinity를 사용하므로 Elasticsearch heap/health 명령은 적용 대상이 아닙니다. 외부 NVIDIA embedding은 온라인 환경용이고, 폐쇄망에서는 내부 vLLM의 생성 모델과 별개로 Ollama 또는 사내 OpenAI 호환 embedding endpoint를 등록합니다. 생성 LLM과 embedding 모델의 역할은 서로 대체되지 않습니다.
+이 배포는 Infinity를 사용하므로 Elasticsearch heap/health 명령은 적용 대상이 아닙니다. 외부 NVIDIA embedding은 온라인 환경용이고, 폐쇄망에서는 번들의 선택형 Qwen3 TEI 또는 사내 embedding endpoint를 등록합니다. 생성 LLM과 embedding 모델의 역할은 서로 대체되지 않습니다.
 
 `stop`은 컨테이너와 네트워크만 제거하며 데이터 볼륨은 삭제하지 않습니다.
 
@@ -138,7 +148,7 @@ EMBEDDING_BATCH_SIZE=8
 
 ## 디스크 기준
 
-공식 50 GB 권장은 이미지, 검색 엔진, 모델, 문서 증가분까지 여유 있게 포함한 운영 기준입니다. 이 프로필은 Elasticsearch와 로컬 TEI 모델을 제외하고 로그를 순환시켜 초기 설치와 소규모 문서 시험을 25 GB 이내로 유지하는 것을 목표로 합니다. 스크립트는 pull/start 전에 C 드라이브 여유 공간 20 GiB를 검사합니다. 문서 원본, 파싱 결과, 인덱스는 계속 증가하므로 `lig-ragflow.ps1 status`의 Docker 사용량을 정기적으로 확인해야 합니다.
+공식 50 GB 권장은 이미지, 검색 엔진, 모델, 문서 증가분까지 여유 있게 포함한 운영 기준입니다. 기본 RAGFlow 설치와 선택형 Qwen3 이미지 아카이브는 분리되어 있으며, Qwen3 모델 이미지는 로컬 Docker에 약 1.18 GB를 추가합니다. 스크립트는 pull/start 전에 C 드라이브 여유 공간 20 GiB를 검사합니다. 문서 원본, 파싱 결과, 인덱스는 계속 증가하므로 `lig-ragflow.ps1 status`의 Docker 사용량을 정기적으로 확인해야 합니다.
 
 Windows의 Docker VHDX는 내부 데이터를 지워도 파일 크기가 즉시 줄지 않습니다. 실제 C 드라이브 공간 회수에는 Docker 종료 후 관리자 권한으로 VHDX 최적화가 별도로 필요합니다.
 
@@ -146,9 +156,9 @@ Windows의 Docker VHDX는 내부 데이터를 지워도 파일 크기가 즉시 
 
 온라인 환경의 기본 구성은 NVIDIA 공개 API의 `nvidia/llama-nemotron-embed-vl-1b-v2`를 사용하므로 로컬 임베딩 모델 메모리가 필요하지 않습니다. RAGFlow의 NVIDIA 드라이버는 문서 인덱싱에는 `input_type=passage`, 검색 질의에는 `input_type=query`를 사용하고 긴 입력은 끝부분을 잘라 요청합니다.
 
-RAGFlow `v0.22` 이후 기본 이미지는 임베딩 모델을 포함하지 않습니다. 에어갭 대체 구성은 Ollama와 다국어 `qwen3-embedding:0.6b`를 사용합니다. Ollama 모델은 약 639 MB이고 100개 이상 언어 및 32K 문맥을 지원해 한국어 문서 시험에 적합합니다. 16 GB 노트북에는 공식 TEI 기본 Qwen3 0.6B(약 25 GB RAM 요구)나 BGE-M3(약 21 GB)가 맞지 않아 TEI는 제외했습니다.
+RAGFlow 기본 이미지는 임베딩 모델을 포함하지 않습니다. 이 배포는 Apache-2.0의 `Qwen/Qwen3-Embedding-0.6B`를 커밋 `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`으로 고정하고 TEI `cpu-1.9` 이미지에 포함합니다. 모델은 100개 이상 언어와 1024차원 벡터를 지원합니다. 운영 설정은 RAGFlow 청크 처리에 맞춰 요청당 최대 2,048 토큰으로 자동 절단하며, 검색 질의에만 Qwen 권장 instruction을 붙이고 문서 청크는 원문 그대로 임베딩합니다.
 
-에어갭 반입 시에는 compose에 사용되는 모든 Docker 이미지를 인터넷 환경에서 내보내 gzip으로 압축하고, 폐쇄망에서 Docker가 압축 아카이브를 직접 복원합니다. 기본 내보내기에는 LIG UI 이미지와 공식 롤백 이미지가 모두 포함되며 Ollama는 포함하지 않습니다.
+에어갭 반입 폴더에는 기본 런타임 아카이브와 선택형 Qwen3 임베딩 아카이브가 각각 gzip으로 들어갑니다. `install.ps1`과 `install-gpu.ps1`은 기본 런타임만 로드하며, 사용자가 `install-embedding-cpu.ps1`을 추가 실행할 때만 Qwen3 아카이브를 로드하고 서비스를 시작합니다.
 
 온라인 PC에서 반입 묶음을 만드는 명령은 다음과 같습니다. 결과 폴더에는 커스텀 UI와 LIG 관리 MCP를 포함한 고정 버전 이미지, 공식 Compose 런타임, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
 내보내기 대상은 기존 파일이나 비밀값이 섞이지 않은 빈 폴더여야 합니다.
@@ -164,18 +174,25 @@ cd D:\LIG-RAGFlow-Airgap
 .\install.ps1
 ```
 
-이후에는 같은 폴더의 `start.ps1`, `stop.ps1`, `status.ps1`, `logs.ps1`로 운영합니다.
+NVIDIA GPU 장비에는 다음 설치 스크립트를 사용합니다. CUDA 접근이 확인되지 않으면 설치가 즉시 실패합니다.
+
+```powershell
+.\install-gpu.ps1
+```
+
+이후 CPU 장비는 `start.ps1`, GPU 장비는 `start-gpu.ps1`로 시작합니다. GPU 진단은 `diagnostics-gpu.ps1`을 사용합니다.
+
+폐쇄망 장비에 사내 임베딩 서버가 없다면 기본 설치 후 다음 스크립트를 한 번 더 실행합니다. 이후 재부팅 시 컨테이너의 `unless-stopped` 정책으로 자동 시작되며, 수동 시작·중지·검증 스크립트도 함께 제공됩니다.
+
+```powershell
+.\install-embedding-cpu.ps1
+.\test-embedding.ps1
+```
 
 폐쇄망 내부 vLLM을 사용할 때는 RAGFlow에 vLLM의 OpenAI 호환 base URL과 모델명을 등록합니다. vLLM이 Docker 호스트에서 실행되면 `http://host.docker.internal:<port>/v1`, 별도 폐쇄망 서버라면 `http://<internal-vllm-host>:<port>/v1` 형태를 사용합니다. RAGFlow 컨테이너 내부의 `127.0.0.1`은 vLLM 호스트가 아니므로 base URL로 사용하지 않습니다.
 
-Ollama 모델까지 반입할 경우에만 다음처럼 선택 옵션을 사용합니다. 이때 `lig-ragflow-ollama-1` 컨테이너에 모델이 미리 설치되어 있어야 합니다.
-
-```powershell
-.\airgap-export.ps1 -Destination D:\LIG-RAGFlow-Airgap -IncludeOllama
-```
-
 ## MCP 범위
 
-RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://127.0.0.1:42203/mcp`와 LIG 관리 MCP `http://127.0.0.1:42206/mcp`를 RAGFlow와 함께 시작합니다. 관리 MCP는 데이터셋·문서와 나머지 `/api/v1` 운영 기능을 제공하며, 요청에는 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 Bearer 키로 사용합니다.
+RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://127.0.0.1:42303/mcp`와 LIG 관리 MCP `http://127.0.0.1:42306/mcp`를 RAGFlow와 함께 시작합니다. 관리 MCP는 데이터셋·문서와 나머지 `/api/v1` 운영 기능을 제공하며, 요청에는 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 Bearer 키로 사용합니다.
 
 컨테이너 MCP가 읽을 파일은 `LIG-Deployment/mcp-files`에 넣고 도구 인수에는 `/data/<파일명>`을 전달합니다. 이 폴더는 Compose에서 관리 MCP 컨테이너에만 연결됩니다.

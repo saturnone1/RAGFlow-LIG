@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory)]
-    [string]$Source
+    [string]$Source,
+
+    [ValidateSet("cpu", "gpu")]
+    [string]$Device = "cpu"
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,7 +14,7 @@ $manifestPath = Join-Path $sourcePath "manifest.json"
 foreach ($file in @($imageArchive, $manifestPath)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required archive not found: $file" } }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 3) {
+if ($manifest.bundleFormat -ne 6) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
 if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-1") {
@@ -20,13 +23,18 @@ if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-1") {
 if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-1") {
     throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
 }
-foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage)) {
+if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-1") {
+    throw "Unsupported or missing Korean OCR image in manifest: $($manifest.ocrImage)"
+}
+foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
     if ($requiredImage -notin @($manifest.images)) { throw "Required image is absent from manifest images: $requiredImage" }
 }
-$includesOllama = [bool]$manifest.includesOllama
-$modelArchive = Join-Path $sourcePath "lig-ollama-models.tgz"
-if ($includesOllama -and -not (Test-Path -LiteralPath $modelArchive -PathType Leaf)) {
-    throw "Required Ollama model archive not found: $modelArchive"
+if ($manifest.embeddingModel -ne "Qwen/Qwen3-Embedding-0.6B") {
+    throw "Unsupported or missing optional embedding model in manifest: $($manifest.embeddingModel)"
+}
+$expectedEmbeddingImages = @("lig/qwen3-embedding-tei:0.6b-1", "lig/qwen3-embedding-adapter:0.6b-1")
+if ((@($manifest.embeddingImages | Sort-Object) -join "`n") -ne (@($expectedEmbeddingImages | Sort-Object) -join "`n")) {
+    throw "Optional embedding image list is missing or unsupported."
 }
 foreach ($record in $manifest.files) {
     $file = [IO.Path]::GetFullPath((Join-Path $sourcePath ([string]$record.file)))
@@ -52,6 +60,33 @@ docker image inspect $manifest.uiImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Custom UI image was not loaded: $($manifest.uiImage)" }
 docker image inspect $manifest.mcpImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Management MCP image was not loaded: $($manifest.mcpImage)" }
+docker image inspect $manifest.ocrImage *> $null
+if ($LASTEXITCODE -ne 0) { throw "Korean PaddleOCR image was not loaded: $($manifest.ocrImage)" }
+if (-not $manifest.imageIds) { throw "Manifest image IDs are missing." }
+foreach ($image in @($manifest.images)) {
+    $expectedIdProperty = $manifest.imageIds.PSObject.Properties[[string]$image]
+    if (-not $expectedIdProperty) { throw "Manifest image ID is missing: $image" }
+    $actualId = (& docker image inspect --format '{{.Id}}' $image).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualId -ne [string]$expectedIdProperty.Value) {
+        throw "Loaded image ID does not match the manifest: $image"
+    }
+}
+
+if ($Device -eq "gpu") {
+    Write-Host "Validating NVIDIA GPU access from the RAGFlow image..."
+    docker run --rm --gpus all --entrypoint nvidia-smi $manifest.uiImage --query-gpu=name,memory.total,driver_version --format=csv,noheader
+    if ($LASTEXITCODE -ne 0) {
+        throw "NVIDIA GPU validation failed. Install a supported NVIDIA driver and NVIDIA Container Toolkit, enable GPU access in Docker Desktop, and retry."
+    }
+    docker run --rm --gpus all --entrypoint python3 $manifest.uiImage -c "import onnxruntime as ort; session=ort.InferenceSession('/ragflow/rag/res/deepdoc/layout.onnx', providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'DeepDoc CUDA provider unavailable: {providers}'; print('DeepDoc ONNX provider:', providers[0])"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The GPU is visible, but DeepDoc could not create a CUDA ONNX session. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
+    }
+    docker run --rm --gpus all --entrypoint /ragflow/.venv/bin/python $manifest.ocrImage -c "from pathlib import Path; import onnxruntime as ort; providers=ort.get_available_providers(); assert 'CUDAExecutionProvider' in providers, f'PaddleOCR CUDA provider unavailable: {providers}'; assert Path('/dev/nvidiactl').exists(), 'NVIDIA device is unavailable'; print('PaddleOCR ONNX provider: CUDAExecutionProvider')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The GPU is visible, but the PaddleOCR image cannot use CUDAExecutionProvider. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
+    }
+}
 
 $secretFile = Join-Path $PSScriptRoot ".env.secret"
 if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
@@ -68,8 +103,14 @@ if (-not (Test-Path -LiteralPath $mcpDataDirectory -PathType Container)) {
 }
 
 $previousProfiles = $env:COMPOSE_PROFILES
+$previousDevice = $env:DEVICE
+$previousWorkers = $env:TASK_EXECUTOR_WORKERS
 try {
-    $env:COMPOSE_PROFILES = if ($includesOllama) { "infinity,cpu,ollama" } else { "infinity,cpu" }
+    $env:DEVICE = $Device
+    $env:COMPOSE_PROFILES = "infinity,$Device"
+    if ($Device -eq "gpu") {
+        $env:TASK_EXECUTOR_WORKERS = "1"
+    }
     & (Join-Path $PSScriptRoot "lig-ragflow.ps1") start
     if ($LASTEXITCODE -ne 0) { throw "RAGFlow start failed" }
 }
@@ -80,20 +121,6 @@ finally {
     else {
         $env:COMPOSE_PROFILES = $previousProfiles
     }
-}
-
-if ($includesOllama) {
-    $container = "lig-ragflow-ollama-1"
-    $containerArchive = "/tmp/lig-ollama-models.tgz"
-    docker cp $modelArchive "${container}:${containerArchive}"
-    if ($LASTEXITCODE -ne 0) { throw "Ollama model copy failed" }
-    try {
-        docker exec $container tar -C /root/.ollama -xzf $containerArchive
-        if ($LASTEXITCODE -ne 0) { throw "Ollama model restore failed" }
-    }
-    finally {
-        docker exec $container rm -f $containerArchive *> $null
-    }
-    docker exec $container ollama show $manifest.ollamaModel
-    if ($LASTEXITCODE -ne 0) { throw "Restored embedding model validation failed" }
+    if ($null -eq $previousDevice) { Remove-Item Env:DEVICE -ErrorAction SilentlyContinue } else { $env:DEVICE = $previousDevice }
+    if ($null -eq $previousWorkers) { Remove-Item Env:TASK_EXECUTOR_WORKERS -ErrorAction SilentlyContinue } else { $env:TASK_EXECUTOR_WORKERS = $previousWorkers }
 }

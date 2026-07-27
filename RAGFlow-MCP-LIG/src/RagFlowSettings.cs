@@ -9,7 +9,7 @@ public sealed record RagFlowSettings(
 {
     public static RagFlowSettings Load()
     {
-        var baseUrl = Environment.GetEnvironmentVariable("RAGFLOW_BASE_URL") ?? "http://127.0.0.1:42201";
+        var baseUrl = Environment.GetEnvironmentVariable("RAGFLOW_BASE_URL") ?? "http://127.0.0.1:42301";
         var apiKey = Environment.GetEnvironmentVariable("RAGFLOW_API_KEY") ?? "";
         var timeout = int.TryParse(Environment.GetEnvironmentVariable("RAGFLOW_TIMEOUT_MINUTES"), out var value) ? Math.Clamp(value, 1, 1440) : 30;
         var writes = string.Equals(Environment.GetEnvironmentVariable("RAGFLOW_WRITES_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);

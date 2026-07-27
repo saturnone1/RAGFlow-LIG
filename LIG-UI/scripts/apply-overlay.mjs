@@ -23,6 +23,8 @@ const expectedHashes = {
   'src/components/api-service/chat-overview-modal/backend-service-api.tsx': '6d5c6a24167883269be157c01f3a36fe3324d1c43e87f242a23aa9a37eec752d',
   'src/components/embed-dialog/index.tsx': '47aec9038666136f4536c0f60ad2b4685dd9510ed7eec0a0e9e7e165b05cf741',
   'src/constants/agent.tsx': 'cc248cba0aa8d9ef309a48097ad24cab5da828658f9a896ba1810f2004e2f67c',
+  'src/pages/dataset/dataset-setting/form-schema.ts': '42414b182a33d7ec500229bf3ee971a5c2ccedf247b5312b39b379d56e5f8df2',
+  'src/pages/dataset/dataset-setting/saving-button.tsx': '07b515ed2b8bf3b1c32c3a8e3d431e5971bb8722aca21da867334da629f7fef4',
 };
 
 function sha256(path) {
@@ -249,6 +251,53 @@ content = replaceOnce(
   'agent code template URL',
 );
 write('src/constants/agent.tsx', content);
+
+content = read('src/pages/dataset/dataset-setting/form-schema.ts');
+content = replaceOnce(
+  content,
+  "table_column_mode: z.enum(['auto', 'manual']).optional(),",
+  "table_column_mode: z.enum(['auto', 'manual']).nullish(),",
+  'nullable table column mode',
+);
+content = replaceOnce(
+  content,
+  `        table_column_roles: z
+          .record(
+            z
+              .enum(['indexing', 'metadata', 'both', 'vectorize'])
+              .transform((role) => (role === 'vectorize' ? 'indexing' : role)),
+          )
+          .optional(),`,
+  `        table_column_roles: z
+          .record(
+            z
+              .enum(['indexing', 'metadata', 'both', 'vectorize'])
+              .transform((role) => (role === 'vectorize' ? 'indexing' : role)),
+          )
+          .nullish(),`,
+  'nullable table column roles',
+);
+content = replaceOnce(
+  content,
+  'table_column_names: z.array(z.string()).optional(),',
+  'table_column_names: z.array(z.string()).nullish(),',
+  'nullable table column names',
+);
+write('src/pages/dataset/dataset-setting/form-schema.ts', content);
+
+content = read('src/pages/dataset/dataset-setting/saving-button.tsx');
+content =
+  "import { configurePaddleOcrWholePdf } from '@/brand/paddleocr-task';\n" +
+  content;
+content = replaceOnce(
+  content,
+  `                  parser_config: {
+                    ...values.parser_config,`,
+  `                  parser_config: {
+                    ...configurePaddleOcrWholePdf(values.parser_config),`,
+  'PaddleOCR whole-PDF task configuration',
+);
+write('src/pages/dataset/dataset-setting/saving-button.tsx', content);
 
 cpSync(overlayRoot, webRoot, { recursive: true, force: true });
 
