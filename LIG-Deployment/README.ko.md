@@ -103,6 +103,8 @@ RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Ba
 
 ## 문서 처리 구조와 튜닝
 
+지원 확장자×청킹 방식의 전체 표, HWP/HWPX 변환 손실, 파일 열기 암호 제외 범위와 키 회전·복구 절차는 [DOCUMENT-COMPATIBILITY.ko.md](DOCUMENT-COMPATIBILITY.ko.md)를 기준으로 합니다.
+
 기본 문서 등록 경로는 다음과 같습니다.
 
 ```text
@@ -118,7 +120,7 @@ upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 
 
 암호화된 바이너리 HWP는 검증된 공개 복호화 구현이 없어 현재 명시적으로 거부하며 HWPX 또는 DOCX로 다시 저장해야 합니다. HWP 배포용 문서, PDF 권한 제한, Office 편집·시트 보호처럼 열람이 아니라 사용 권한을 제한하는 문서는 우회하지 않습니다. Microsoft IRM/MIP/AIP, FASOO 등 계정·인증서·권한 서버 기반 DRM도 대상이 아닙니다. 레거시 `.xls`와 `.ppt`의 오래된 암호 규격은 복호화 라이브러리의 실험적·부분 지원 범위에 따라 거부될 수 있습니다.
 
-`LIG_DOCUMENT_PASSWORD_KEY`는 최초 `config`/`start` 또는 에어갭 반입 때 자동 생성됩니다. 기존 `LIG_PDF_PASSWORD_KEY`가 있으면 같은 키 값을 새 이름으로 자동 이전하여 저장된 PDF 암호를 계속 사용할 수 있습니다. 이 값을 잃거나 바꾸면 기존에 저장한 문서 비밀번호를 해제할 수 없으므로 `.env.secret`을 운영 백업에 포함하되 Git이나 에어갭 배포 묶음에는 넣지 마십시오. 비밀번호 평문과 내부 암호문은 API 응답 및 진단 출력에 포함되지 않습니다.
+`LIG_DOCUMENT_PASSWORD_KEY`는 최초 `config`/`start` 또는 에어갭 반입 때 자동 생성됩니다. 기존 `LIG_PDF_PASSWORD_KEY`가 있으면 같은 키 값을 새 이름으로 자동 이전하여 저장된 PDF 암호를 계속 사용할 수 있습니다. 이 값을 잃거나 바꾸면 기존에 저장한 문서 비밀번호를 해제할 수 없으므로 `.env.secret`을 운영 백업에 포함하되 Git이나 에어갭 배포 묶음에는 넣지 마십시오. 비밀번호 평문과 내부 암호문은 API 응답 및 진단 출력에 포함되지 않습니다. 운영 중 키는 `rotate-document-password-key.ps1 audit|rotate`로 감사·회전하며, 회전 전 백업과 DB를 같은 복구 시점으로 관리합니다.
 
 DeepDOC는 삭제하지 않습니다. DeepDOC는 OCR뿐 아니라 레이아웃, 표, 좌표와 이미지 영역을 처리하며 영어·중국어 문서 및 복잡한 편집 문서에서 여전히 별도 가치가 있습니다. 한국어 스캔 문서에서는 DeepDOC 문자 사전에 한글이 없어 PaddleOCR를 사용합니다.
 

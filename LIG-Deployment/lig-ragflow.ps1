@@ -128,6 +128,12 @@ function Ensure-DocumentPasswordKey {
         Write-Host "Generated the local document password encryption key in LIG-Deployment\.env.secret."
     }
     if ($legacyKeyLineIndex -ge 0) { $lines = @($lines | Where-Object { $_ -notmatch '^\s*LIG_PDF_PASSWORD_KEY=' }) }
+    if (-not ($lines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_KEY_ID=' })) {
+        $lines += "LIG_DOCUMENT_PASSWORD_KEY_ID=primary"
+    }
+    if (-not ($lines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS=' })) {
+        $lines += "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS="
+    }
     [IO.File]::WriteAllLines($secretFile, $lines, [Text.UTF8Encoding]::new($false))
 }
 

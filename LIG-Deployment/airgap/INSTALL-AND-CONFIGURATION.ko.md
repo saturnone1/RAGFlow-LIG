@@ -188,7 +188,7 @@ DeepDoc/PaddleOCR GPU와 이 embedding 서비스는 별개입니다. Qwen3는 CP
 
 DeepDOC는 영어·중국어 문서와 표·레이아웃·좌표 처리용으로 유지합니다. PaddleOCR 한국어 모델은 한국어·영어·숫자 인식에 집중하므로 모든 문서에 대한 무조건적인 대체재는 아닙니다.
 
-업로드 창은 PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, HWP/HWPX별 파일 열기 비밀번호를 받습니다. 암호화된 최신 Office와 HWPX는 업로드 때 검증하고 파싱 직전에 메모리에서 복호화합니다. 일반 HWP 5와 HWPX도 텍스트로 처리하지만 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 배포용 HWP, 편집·시트 보호, Microsoft IRM/MIP/AIP 및 FASOO DRM은 권한 우회 대상이 아닙니다. `.env.secret`의 `LIG_DOCUMENT_PASSWORD_KEY`를 잃으면 저장된 문서 암호를 다시 사용할 수 없으므로 운영 백업에 포함하십시오.
+업로드 창은 PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, HWP/HWPX별 파일 열기 비밀번호를 받습니다. 암호화된 최신 Office와 HWPX는 업로드 때 검증하고 파싱 직전에 메모리에서 복호화합니다. 일반 HWP 5와 HWPX도 텍스트로 처리하지만 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 배포용 HWP, 편집·시트 보호, Microsoft IRM/MIP/AIP 및 FASOO DRM은 권한 우회 대상이 아닙니다. `.env.secret`의 활성/이전 키를 잃으면 저장된 문서 암호를 다시 사용할 수 없으므로 DB와 같은 복구 시점으로 암호화 백업하십시오. 전체 확장자 표와 키 감사·회전·복구 절차는 상위 `DOCUMENT-COMPATIBILITY.ko.md`를 따릅니다.
 
 온라인 NVIDIA `nvidia/llama-nemotron-embed-vl-1b-v2`와 로컬 Qwen3는 벡터 차원과 의미 공간이 다릅니다. 운영 모델을 결정한 뒤 고정하고, 변경 시 전체 재인덱싱 계획을 세우십시오.
 

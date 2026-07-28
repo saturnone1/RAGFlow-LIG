@@ -129,6 +129,12 @@ if ([string]::IsNullOrWhiteSpace($documentKeyValue) -or $documentKeyValue -eq "g
     Write-Host "Generated the local document password encryption key."
 }
 if ($legacyKeyIndex -ge 0) { $secretLines = @($secretLines | Where-Object { $_ -notmatch '^\s*LIG_PDF_PASSWORD_KEY=' }) }
+if (-not ($secretLines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_KEY_ID=' })) {
+    $secretLines += "LIG_DOCUMENT_PASSWORD_KEY_ID=primary"
+}
+if (-not ($secretLines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS=' })) {
+    $secretLines += "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS="
+}
 [IO.File]::WriteAllLines($secretFile, $secretLines, [Text.UTF8Encoding]::new($false))
 $logDirectory = Join-Path $PSScriptRoot "ragflow-logs"
 if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {

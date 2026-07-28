@@ -380,6 +380,7 @@ content = replaceOnce(
 write('src/components/file-upload-dialog/index.tsx', content);
 
 content = read('src/pages/dataset/dataset/use-upload-document.ts');
+content = "import message from '@/components/ui/message';\n" + content;
 content = replaceOnce(
   content,
   "      tableColumnRoles,\n    }: UploadFormSchemaType) => {",
@@ -391,6 +392,35 @@ content = replaceOnce(
   '        const ret = await uploadDocument(fileList as File[], parserConfig);',
   '        const ret = await uploadDocument(fileList, parserConfig, documentPasswords);',
   'submit document passwords',
+);
+content = replaceOnce(
+  content,
+  `        if (!isSuccess && !isPartialSuccess) {
+          return;
+        }`,
+  `        if (!isSuccess && !isPartialSuccess) {
+          message.error(ret?.message || 'The selected chunk method cannot process this file.');
+          return;
+        }`,
+  'show actionable upload compatibility error',
+);
+content = replaceOnce(
+  content,
+  `        if (count !== fileList.length) {
+          hideDocumentUploadModal();
+          return 0;
+        }
+
+        return ret?.code;`,
+  `        if (count !== fileList.length) {
+          hideDocumentUploadModal();
+          message.error(ret?.message || 'Some files could not be processed.');
+          return 0;
+        }
+
+        message.error(ret?.message || 'The selected chunk method cannot process these files.');
+        return ret?.code;`,
+  'show partial and complete upload failures',
 );
 write('src/pages/dataset/dataset/use-upload-document.ts', content);
 

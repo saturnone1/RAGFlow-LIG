@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import struct
@@ -12,7 +13,8 @@ from copy import deepcopy
 from hashlib import pbkdf2_hmac, sha256
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from threading import Lock
+from threading import Event, Lock
+from time import monotonic
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
@@ -42,19 +44,38 @@ OFFICE_EXTENSIONS = frozenset({".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"
 HANCOM_EXTENSIONS = frozenset({".hwp", ".hwpx"})
 
 _KEY_ENV = "LIG_DOCUMENT_PASSWORD_KEY"
+_KEY_ID_ENV = "LIG_DOCUMENT_PASSWORD_KEY_ID"
+_PREVIOUS_KEYS_ENV = "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS"
 _LEGACY_KEY_ENV = "LIG_PDF_PASSWORD_KEY"
 _AAD = b"lig-ragflow/document-password/v2"
+_V3_AAD_PREFIX = b"lig-ragflow/document-password/v3/"
 _LEGACY_AAD = b"lig-ragflow/pdf-password/v1"
 _DECRYPT_CACHE_LIMIT = 128 * 1024 * 1024
 _DECRYPT_CACHE_ITEM_LIMIT = 64 * 1024 * 1024
+_DECRYPT_CACHE_TTL_SECONDS = 10 * 60
 _MAX_HWPX_ENTRY_SIZE = 256 * 1024 * 1024
+_MAX_HWPX_ARCHIVE_EXPANDED_SIZE = 512 * 1024 * 1024
+_MAX_HWPX_XML_SIZE = 64 * 1024 * 1024
+_MAX_HWPX_MANIFEST_SIZE = 4 * 1024 * 1024
+_MAX_HWPX_ARCHIVE_ENTRIES = 4096
+_MAX_HWPX_ENCRYPTED_ENTRIES = 512
+_MAX_HWPX_XML_ELEMENTS = 1_000_000
+_MAX_HWPX_PBKDF_ITERATIONS = 1_000_000
+_MAX_HWPX_TOTAL_PBKDF_ITERATIONS = 8_000_000
+_MAX_HWPX_SALT_SIZE = 64
+_MAX_HWP_FILE_SIZE = 256 * 1024 * 1024
+_MAX_HWP_STREAMS = 4096
+_MAX_HWP_BODY_SECTIONS = 1024
+_MAX_HWP_RECORDS = 2_000_000
+_MAX_OFFICE_DECRYPTED_SIZE = 512 * 1024 * 1024
 _MANIFEST_NS = "{urn:oasis:names:tc:opendocument:xmlns:manifest:1.0}"
 _HWP_SIGNATURE = b"HWP Document File"
 _HWP_PARA_TEXT_TAG = 67
 
-_decrypt_cache: OrderedDict[tuple[str, str], tuple[str, bytes]] = OrderedDict()
+_decrypt_cache: OrderedDict[tuple[str, str], tuple[str, bytes, float]] = OrderedDict()
 _decrypt_cache_size = 0
 _decrypt_cache_lock = Lock()
+_decrypt_inflight: dict[tuple[str, str], Event] = {}
 
 
 class DocumentPasswordError(ValueError):
@@ -85,6 +106,38 @@ def _key() -> bytes:
     return key
 
 
+def _key_id() -> str:
+    key_id = os.environ.get(_KEY_ID_ENV, "primary").strip() or "primary"
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", key_id):
+        raise RuntimeError(f"{_KEY_ID_ENV} must contain 1-64 letters, digits, dots, underscores, or hyphens.")
+    return key_id
+
+
+def _keyring() -> tuple[str, dict[str, bytes]]:
+    active_id = _key_id()
+    keys = {active_id: _key()}
+    encoded_previous = os.environ.get(_PREVIOUS_KEYS_ENV, "").strip()
+    if encoded_previous:
+        for item in encoded_previous.split(","):
+            if not item.strip() or ":" not in item:
+                raise RuntimeError(f"{_PREVIOUS_KEYS_ENV} must use key-id:base64,key-id:base64 format.")
+            key_id, encoded = (part.strip() for part in item.split(":", 1))
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", key_id):
+                raise RuntimeError(f"{_PREVIOUS_KEYS_ENV} contains an invalid key id.")
+            try:
+                key = b64decode(encoded, validate=True)
+            except ValueError as exc:
+                raise RuntimeError(f"{_PREVIOUS_KEYS_ENV} contains invalid base64 key material.") from exc
+            if len(key) != 32:
+                raise RuntimeError(f"{_PREVIOUS_KEYS_ENV} keys must decode to exactly 32 bytes.")
+            if key_id in keys and keys[key_id] != key:
+                raise RuntimeError(f"{_PREVIOUS_KEYS_ENV} redefines the active key id.")
+            keys[key_id] = key
+            if len(keys) > 16:
+                raise RuntimeError(f"{_PREVIOUS_KEYS_ENV} may contain at most 15 previous keys.")
+    return active_id, keys
+
+
 def _legacy_key() -> bytes:
     key = _key_from_environment(_LEGACY_KEY_ENV) or _key_from_environment(_KEY_ENV)
     if key is None:
@@ -103,9 +156,14 @@ def _validate_password(password: object) -> str:
 
 
 def _seal(password: str) -> str:
+    active_id, keys = _keyring()
     nonce = os.urandom(12)
-    ciphertext = AESGCM(_key()).encrypt(nonce, password.encode("utf-8"), _AAD)
-    return "v2:" + b64encode(nonce + ciphertext).decode("ascii")
+    ciphertext = AESGCM(keys[active_id]).encrypt(
+        nonce,
+        password.encode("utf-8"),
+        _V3_AAD_PREFIX + active_id.encode("ascii"),
+    )
+    return f"v3:{active_id}:" + b64encode(nonce + ciphertext).decode("ascii")
 
 
 def _decrypt_sealed_payload(token: object, prefix: str, key: bytes, aad: bytes) -> str:
@@ -122,9 +180,43 @@ def _decrypt_sealed_payload(token: object, prefix: str, key: bytes, aad: bytes) 
 
 
 def _unseal(token: object) -> str:
+    if isinstance(token, str) and token.startswith("v3:"):
+        try:
+            _, key_id, _ = token.split(":", 2)
+        except ValueError as exc:
+            raise DocumentPasswordError("The saved document password has an unsupported format.") from exc
+        _, keys = _keyring()
+        key = keys.get(key_id)
+        if key is None:
+            raise DocumentPasswordError(f"The document password key '{key_id}' is not configured on this server.")
+        return _decrypt_sealed_payload(
+            token,
+            f"v3:{key_id}:",
+            key,
+            _V3_AAD_PREFIX + key_id.encode("ascii"),
+        )
     if isinstance(token, str) and token.startswith("v1:"):
-        return _decrypt_sealed_payload(token, "v1:", _legacy_key(), _LEGACY_AAD)
-    return _decrypt_sealed_payload(token, "v2:", _key(), _AAD)
+        candidates = [_legacy_key(), *_keyring()[1].values()]
+        prefix, aad = "v1:", _LEGACY_AAD
+    elif isinstance(token, str) and token.startswith("v2:"):
+        candidates = list(_keyring()[1].values())
+        prefix, aad = "v2:", _AAD
+    else:
+        raise DocumentPasswordError("The saved document password has an unsupported format.")
+    seen: set[bytes] = set()
+    for key in candidates:
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            return _decrypt_sealed_payload(token, prefix, key, aad)
+        except DocumentPasswordError:
+            continue
+    raise DocumentPasswordError("The saved document password could not be decrypted with the configured keys.")
+
+
+def _token_uses_active_key(token: object) -> bool:
+    return isinstance(token, str) and token.startswith(f"v3:{_key_id()}:")
 
 
 def _pop_private_fields(config: dict) -> tuple[object, bool, bool]:
@@ -155,7 +247,11 @@ def secure_parser_config(parser_config: dict | None, filename: str) -> tuple[dic
     existing = current or legacy
     if not supplied and not clear:
         if existing:
-            config[PASSWORD_STORAGE_FIELD] = existing
+            if _token_uses_active_key(existing):
+                config[PASSWORD_STORAGE_FIELD] = existing
+                return config, False
+            config[PASSWORD_STORAGE_FIELD] = _seal(_unseal(existing))
+            return config, True
         return config, False
     if _extension(filename) not in SUPPORTED_PASSWORD_EXTENSIONS:
         raise DocumentPasswordError(
@@ -164,7 +260,22 @@ def secure_parser_config(parser_config: dict | None, filename: str) -> tuple[dic
     if clear or password is None:
         config[PASSWORD_STORAGE_FIELD] = None
         return config, True
-    config[PASSWORD_STORAGE_FIELD] = _seal(_validate_password(password))
+    validated_password = _validate_password(password)
+    if current and _token_uses_active_key(current) and _unseal(current) == validated_password:
+        config[PASSWORD_STORAGE_FIELD] = current
+        return config, False
+    config[PASSWORD_STORAGE_FIELD] = _seal(validated_password)
+    return config, True
+
+
+def rewrap_parser_config(parser_config: dict | None) -> tuple[dict, bool]:
+    """Re-encrypt a stored document password with the configured active key."""
+    config = deepcopy(parser_config or {})
+    token = _password_token(config)
+    if not token or _token_uses_active_key(token):
+        return config, False
+    config.pop(LEGACY_STORAGE_FIELD, None)
+    config[PASSWORD_STORAGE_FIELD] = _seal(_unseal(token))
     return config, True
 
 
@@ -265,16 +376,41 @@ def _office_file(binary: bytes):
         return None
 
 
+class _LimitedBytesIO(BytesIO):
+    def __init__(self, limit: int):
+        super().__init__()
+        self._limit = limit
+
+    def write(self, value: bytes) -> int:
+        if self.tell() + len(value) > self._limit:
+            raise DocumentPasswordError("The decrypted Office document is too large to process safely.")
+        return super().write(value)
+
+
+def _load_office_key(office_file, password: str) -> bool:
+    """Load a password and report whether the format verified it immediately."""
+    parameters = inspect.signature(office_file.load_key).parameters
+    if "verify_password" in parameters:
+        office_file.load_key(password=password, verify_password=True)
+        return True
+    office_file.load_key(password=password)
+    return False
+
+
+def _decrypt_office(office_file) -> bytes:
+    output = _LimitedBytesIO(_MAX_OFFICE_DECRYPTED_SIZE)
+    office_file.decrypt(output)
+    return output.getvalue()
+
+
 def _prepare_office(filename: str, binary: bytes, config: dict) -> bytes:
     office_file = _office_file(binary)
     if office_file is None or not office_file.is_encrypted():
         return binary
     password = _required_password(filename, config)
     try:
-        office_file.load_key(password=password, verify_password=True)
-        output = BytesIO()
-        office_file.decrypt(output)
-        return output.getvalue()
+        _load_office_key(office_file, password)
+        return _decrypt_office(office_file)
     except Exception as exc:
         message = str(exc).lower()
         if "irm" in message or "rights" in message or "certificate" in message:
@@ -287,6 +423,37 @@ def _safe_hwpx_path(value: str) -> str:
     if not value or path.is_absolute() or ".." in path.parts:
         raise DocumentPasswordError("The HWPX manifest contains an unsafe entry path.")
     return path.as_posix()
+
+
+def _validate_hwpx_archive(archive: ZipFile) -> None:
+    infos = archive.infolist()
+    if len(infos) > _MAX_HWPX_ARCHIVE_ENTRIES:
+        raise DocumentPasswordError("The HWPX package contains too many entries.")
+    names: set[str] = set()
+    expanded_size = 0
+    for info in infos:
+        safe_name = _safe_hwpx_path(info.filename)
+        if safe_name in names:
+            raise DocumentPasswordError("The HWPX package contains duplicate entry names.")
+        names.add(safe_name)
+        if info.file_size < 0 or info.file_size > _MAX_HWPX_ENTRY_SIZE:
+            raise DocumentPasswordError("An HWPX package entry is too large to process safely.")
+        expanded_size += info.file_size
+        if expanded_size > _MAX_HWPX_ARCHIVE_EXPANDED_SIZE:
+            raise DocumentPasswordError("The expanded HWPX package is too large to process safely.")
+
+
+def _bounded_zip_read(archive: ZipFile, name: str, limit: int) -> bytes:
+    try:
+        info = archive.getinfo(name)
+    except KeyError as exc:
+        raise DocumentPasswordError(f"The HWPX package is missing {name}.") from exc
+    if info.file_size < 0 or info.file_size > limit:
+        raise DocumentPasswordError(f"The HWPX entry {name} is too large to process safely.")
+    payload = archive.read(info)
+    if len(payload) > limit:
+        raise DocumentPasswordError(f"The HWPX entry {name} expanded beyond its safe limit.")
+    return payload
 
 
 def _limited_raw_deflate(data: bytes, expected_size: int) -> bytes:
@@ -313,7 +480,9 @@ def _decode_manifest_value(element: ElementTree.Element, name: str) -> bytes:
 
 def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, bytes]:
     try:
-        manifest = ElementTree.fromstring(archive.read("META-INF/manifest.xml"))
+        manifest = ElementTree.fromstring(
+            _bounded_zip_read(archive, "META-INF/manifest.xml", _MAX_HWPX_MANIFEST_SIZE)
+        )
     except (KeyError, ElementTree.ParseError) as exc:
         raise DocumentPasswordError("The HWPX encryption manifest is missing or invalid.") from exc
 
@@ -322,6 +491,8 @@ def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, b
         encryption = entry.find(f"{_MANIFEST_NS}encryption-data")
         if encryption is not None:
             encrypted_entries.append((entry, encryption))
+    if len(encrypted_entries) > _MAX_HWPX_ENCRYPTED_ENTRIES:
+        raise DocumentPasswordError("The HWPX package contains too many encrypted entries.")
     if not encrypted_entries:
         return {}
     if password is None:
@@ -330,6 +501,8 @@ def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, b
     start_key = sha256(password.encode("utf-8")).digest()
     decrypted: dict[str, bytes] = {}
     total_expected_size = 0
+    total_ciphertext_size = 0
+    total_pbkdf_iterations = 0
     for entry, encryption in encrypted_entries:
         algorithm = encryption.find(f"{_MANIFEST_NS}algorithm")
         derivation = encryption.find(f"{_MANIFEST_NS}key-derivation")
@@ -348,8 +521,11 @@ def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, b
             expected_size = int(entry.attrib["size"])
         except (KeyError, ValueError) as exc:
             raise DocumentPasswordError("The HWPX encryption parameters are invalid.") from exc
-        if key_size != 32 or not 1 <= iterations <= 10_000_000:
+        if key_size != 32 or not 1 <= iterations <= _MAX_HWPX_PBKDF_ITERATIONS:
             raise DocumentPasswordError("The HWPX encryption parameters are outside the supported range.")
+        total_pbkdf_iterations += iterations
+        if total_pbkdf_iterations > _MAX_HWPX_TOTAL_PBKDF_ITERATIONS:
+            raise DocumentPasswordError("The HWPX password derivation workload is too large to process safely.")
         total_expected_size += expected_size
         if total_expected_size > _MAX_HWPX_ENTRY_SIZE:
             raise DocumentPasswordError("The encrypted HWPX body is too large to process safely.")
@@ -357,16 +533,27 @@ def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, b
         path = _safe_hwpx_path(entry.attrib.get("full-path", ""))
         salt = _decode_manifest_value(derivation, "salt")
         iv = _decode_manifest_value(algorithm, "initialisation-vector")
+        if not 8 <= len(salt) <= _MAX_HWPX_SALT_SIZE:
+            raise DocumentPasswordError("The HWPX encryption manifest has an invalid salt size.")
         if len(iv) != 16:
             raise DocumentPasswordError("The HWPX encryption manifest has an invalid IV.")
+        try:
+            encrypted_info = archive.getinfo(path)
+        except KeyError as exc:
+            raise DocumentPasswordError("The HWPX encrypted payload is missing.") from exc
+        total_ciphertext_size += encrypted_info.file_size
+        if encrypted_info.file_size > _MAX_HWPX_ENTRY_SIZE or total_ciphertext_size > _MAX_HWPX_ENTRY_SIZE:
+            raise DocumentPasswordError("The HWPX encrypted payload is too large to process safely.")
         key = pbkdf2_hmac("sha1", start_key, salt, iterations, dklen=key_size)
         try:
             decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
-            compressed = decryptor.update(archive.read(path)) + decryptor.finalize()
+            compressed = decryptor.update(_bounded_zip_read(archive, path, _MAX_HWPX_ENTRY_SIZE)) + decryptor.finalize()
         except (KeyError, ValueError) as exc:
             raise DocumentPasswordError("The encrypted HWPX payload is invalid.") from exc
         plain = _limited_raw_deflate(compressed, expected_size)
         checksum = _decode_manifest_value(encryption, "checksum")
+        if len(checksum) != 32:
+            raise DocumentPasswordError("The HWPX encryption manifest has an invalid checksum size.")
         if encryption.attrib.get("checksum-type") != f"{_MANIFEST_NS[1:-1]}#sha256-1k" or sha256(plain[:1024]).digest() != checksum:
             raise DocumentPasswordError("The HWPX password is incorrect or the document is damaged.")
         decrypted[path] = plain
@@ -375,6 +562,75 @@ def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, b
 
 def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
+
+
+def _hwpx_paragraph_text(element: ElementTree.Element) -> str:
+    output: list[str] = []
+    labels = {
+        "footNote": "[Footnote] ",
+        "endNote": "[Endnote] ",
+        "header": "[Header] ",
+        "footer": "[Footer] ",
+    }
+    for descendant in element.iter():
+        local = _local_name(descendant.tag)
+        if local in labels:
+            output.append(labels[local])
+        elif local == "t" and descendant.text:
+            output.append(descendant.text)
+        elif local in {"lineBreak", "br"}:
+            output.append("\n")
+        elif local == "tab":
+            output.append("\t")
+    return "".join(output).strip()
+
+
+def _hwpx_table_markdown(table: ElementTree.Element) -> str:
+    rows: list[list[str]] = []
+    for row in (element for element in table.iter() if _local_name(element.tag) == "tr"):
+        cells = []
+        for cell in (element for element in list(row) if _local_name(element.tag) == "tc"):
+            text = " ".join(
+                paragraph
+                for paragraph in (
+                    _hwpx_paragraph_text(element)
+                    for element in cell.iter()
+                    if _local_name(element.tag) == "p"
+                )
+                if paragraph
+            )
+            cells.append(text.replace("|", "\\|").replace("\n", " "))
+        if cells:
+            rows.append(cells)
+    if not rows:
+        return ""
+    width = max(len(row) for row in rows)
+    normalized = [row + [""] * (width - len(row)) for row in rows]
+    lines = ["| " + " | ".join(normalized[0]) + " |", "| " + " | ".join(["---"] * width) + " |"]
+    lines.extend("| " + " | ".join(row) + " |" for row in normalized[1:])
+    return "\n".join(lines)
+
+
+def _extract_hwpx_blocks(root: ElementTree.Element) -> list[str]:
+    blocks: list[str] = []
+
+    def visit(element: ElementTree.Element) -> None:
+        local = _local_name(element.tag)
+        if local == "tbl":
+            table = _hwpx_table_markdown(element)
+            if table:
+                blocks.append(table)
+            return
+        if local == "p":
+            paragraph = _hwpx_paragraph_text(element)
+            if paragraph:
+                blocks.append(paragraph)
+            return
+        for child in list(element):
+            visit(child)
+
+    visit(root)
+    return blocks
 
 
 def _extract_hwpx_text(archive: ZipFile, decrypted: dict[str, bytes]) -> bytes:
@@ -391,9 +647,11 @@ def _extract_hwpx_text(archive: ZipFile, decrypted: dict[str, bytes]) -> bytes:
             payload = decrypted[name]
         else:
             info = archive.getinfo(name)
-            if info.file_size > _MAX_HWPX_ENTRY_SIZE:
+            if info.file_size > _MAX_HWPX_XML_SIZE:
                 raise DocumentPasswordError("An HWPX body section is too large to process safely.")
-            payload = archive.read(info)
+            payload = _bounded_zip_read(archive, name, _MAX_HWPX_XML_SIZE)
+        if len(payload) > _MAX_HWPX_XML_SIZE:
+            raise DocumentPasswordError("An HWPX body section is too large to process safely.")
         total_size += len(payload)
         if total_size > _MAX_HWPX_ENTRY_SIZE:
             raise DocumentPasswordError("The HWPX body is too large to process safely.")
@@ -401,15 +659,17 @@ def _extract_hwpx_text(archive: ZipFile, decrypted: dict[str, bytes]) -> bytes:
             root = ElementTree.fromstring(payload)
         except ElementTree.ParseError as exc:
             raise DocumentPasswordError("The HWPX body XML is invalid.") from exc
-        for element in root.iter():
-            local = _local_name(element.tag)
-            if local == "t" and element.text:
-                output.append(element.text)
-            elif local in {"p", "tr"} and output and output[-1] != "\n":
-                output.append("\n")
-            elif local == "tc" and output and output[-1] not in {"\n", "\t"}:
-                output.append("\t")
-    text = "".join(output)
+        for element_index, _ in enumerate(root.iter(), start=1):
+            if element_index > _MAX_HWPX_XML_ELEMENTS:
+                raise DocumentPasswordError("The HWPX body XML contains too many elements.")
+        output.extend(_extract_hwpx_blocks(root))
+    media_names = sorted(
+        name
+        for name in archive.namelist()
+        if name.lower().startswith(("bindata/", "attachments/", "embeddedfiles/")) and not name.endswith("/")
+    )
+    output.extend(f"[Embedded object: {name}]" for name in media_names)
+    text = "\n\n".join(output)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not text:
@@ -420,6 +680,7 @@ def _extract_hwpx_text(archive: ZipFile, decrypted: dict[str, bytes]) -> bytes:
 def _prepare_hwpx(filename: str, binary: bytes, config: dict) -> tuple[str, bytes]:
     try:
         with ZipFile(BytesIO(binary)) as archive:
+            _validate_hwpx_archive(archive)
             password = _unseal(_password_token(config)) if _password_token(config) else None
             decrypted = _decrypt_hwpx_entries(archive, password)
             return f"{filename}.txt", _extract_hwpx_text(archive, decrypted)
@@ -428,6 +689,8 @@ def _prepare_hwpx(filename: str, binary: bytes, config: dict) -> tuple[str, byte
 
 
 def _read_hwp_header(binary: bytes) -> tuple[object, bytes, int]:
+    if len(binary) > _MAX_HWP_FILE_SIZE:
+        raise DocumentPasswordError("The HWP file is too large to process safely.")
     ole = None
     try:
         import olefile
@@ -466,15 +729,21 @@ def _clean_hwp_text(payload: bytes) -> str:
 
 
 def _extract_hwp_text(ole, compressed: bool) -> bytes:
+    stream_paths = ole.listdir(streams=True, storages=False)
+    if len(stream_paths) > _MAX_HWP_STREAMS:
+        raise DocumentPasswordError("The HWP file contains too many streams.")
     sections = []
-    for path in ole.listdir(streams=True, storages=False):
+    for path in stream_paths:
         joined = "/".join(path)
         match = re.fullmatch(r"BodyText/Section(\d+)", joined, re.IGNORECASE)
         if match:
             sections.append((int(match.group(1)), joined))
     sections.sort()
+    if len(sections) > _MAX_HWP_BODY_SECTIONS:
+        raise DocumentPasswordError("The HWP file contains too many body sections.")
     output: list[str] = []
     expanded_size = 0
+    record_count = 0
     for _, path in sections:
         if ole.get_size(path) > _MAX_HWPX_ENTRY_SIZE:
             raise DocumentPasswordError("An HWP body section is too large to process safely.")
@@ -495,6 +764,9 @@ def _extract_hwp_text(ole, compressed: bool) -> bytes:
             raise DocumentPasswordError("The HWP body is too large to process safely.")
         offset = 0
         while offset + 4 <= len(data):
+            record_count += 1
+            if record_count > _MAX_HWP_RECORDS:
+                raise DocumentPasswordError("The HWP body contains too many records.")
             header = struct.unpack_from("<I", data, offset)[0]
             offset += 4
             tag = header & 0x3FF
@@ -511,6 +783,12 @@ def _extract_hwp_text(ole, compressed: bool) -> bytes:
                 if text:
                     output.append(text)
             offset += size
+    embedded_objects = sorted(
+        "/".join(path)
+        for path in stream_paths
+        if path and path[0].lower() == "bindata"
+    )
+    output.extend(f"[Embedded object: {path}]" for path in embedded_objects)
     text = "\n".join(output).strip()
     if not text:
         raise DocumentPasswordError("No text could be extracted from the HWP document.")
@@ -536,7 +814,9 @@ def _prepare_hwp(filename: str, binary: bytes, config: dict) -> tuple[str, bytes
 
 
 def _cache_key(binary: bytes, token: object, extension: str) -> tuple[str, str] | None:
-    if len(binary) > _DECRYPT_CACHE_ITEM_LIMIT:
+    # Plain PDF and Office files do not need transformation and must not consume
+    # the decryption cache. Hancom files are always converted to parser text.
+    if len(binary) > _DECRYPT_CACHE_ITEM_LIMIT or (not token and extension not in HANCOM_EXTENSIONS):
         return None
     token_value = token if isinstance(token, str) else "plain"
     return sha256(binary).hexdigest(), f"{extension}:{token_value}"
@@ -548,8 +828,15 @@ def _cached_plaintext(key: tuple[str, str] | None) -> tuple[str, bytes] | None:
     with _decrypt_cache_lock:
         value = _decrypt_cache.get(key)
         if value is not None:
+            filename, binary, expires_at = value
+            if expires_at <= monotonic():
+                global _decrypt_cache_size
+                _decrypt_cache.pop(key, None)
+                _decrypt_cache_size -= len(binary)
+                return None
             _decrypt_cache.move_to_end(key)
-        return value
+            return filename, binary
+        return None
 
 
 def _cache_plaintext(key: tuple[str, str] | None, filename: str, value: bytes) -> None:
@@ -560,11 +847,32 @@ def _cache_plaintext(key: tuple[str, str] | None, filename: str, value: bytes) -
         previous = _decrypt_cache.pop(key, None)
         if previous is not None:
             _decrypt_cache_size -= len(previous[1])
-        _decrypt_cache[key] = (filename, value)
+        _decrypt_cache[key] = (filename, value, monotonic() + _DECRYPT_CACHE_TTL_SECONDS)
         _decrypt_cache_size += len(value)
         while _decrypt_cache_size > _DECRYPT_CACHE_LIMIT and _decrypt_cache:
-            _, (_, evicted) = _decrypt_cache.popitem(last=False)
+            _, (_, evicted, _) = _decrypt_cache.popitem(last=False)
             _decrypt_cache_size -= len(evicted)
+
+
+def _claim_preparation(key: tuple[str, str] | None) -> tuple[bool, Event | None]:
+    if key is None:
+        return True, None
+    with _decrypt_cache_lock:
+        event = _decrypt_inflight.get(key)
+        if event is not None:
+            return False, event
+        event = Event()
+        _decrypt_inflight[key] = event
+        return True, event
+
+
+def _release_preparation(key: tuple[str, str] | None, event: Event | None) -> None:
+    if key is None or event is None:
+        return
+    with _decrypt_cache_lock:
+        if _decrypt_inflight.get(key) is event:
+            _decrypt_inflight.pop(key, None)
+            event.set()
 
 
 def _public_parser_config(config: dict) -> dict:
@@ -582,30 +890,58 @@ def prepare_document_for_parsing(filename: str, binary: bytes, parser_config: di
     config = deepcopy(parser_config or {})
     extension = _extension(filename)
     key = _cache_key(binary, _password_token(config), extension) if extension in SUPPORTED_PASSWORD_EXTENSIONS else None
-    cached = _cached_plaintext(key)
-    if cached is not None:
-        cached_name, cached_binary = cached
-        return cached_name, cached_binary, _public_parser_config(config)
+    while key is not None:
+        cached = _cached_plaintext(key)
+        if cached is not None:
+            cached_name, cached_binary = cached
+            return cached_name, cached_binary, _public_parser_config(config)
+        owner, event = _claim_preparation(key)
+        if owner:
+            break
+        event.wait()
 
-    prepared_name = filename
-    prepared_binary = binary
-    if extension == ".pdf":
-        prepared_binary = _prepare_pdf(filename, binary, config)
-    elif extension in OFFICE_EXTENSIONS:
-        prepared_binary = _prepare_office(filename, binary, config)
-    elif extension == ".hwpx":
-        prepared_name, prepared_binary = _prepare_hwpx(filename, binary, config)
-    elif extension == ".hwp":
-        prepared_name, prepared_binary = _prepare_hwp(filename, binary, config)
+    event = event if key is not None else None
+    try:
+        prepared_name = filename
+        prepared_binary = binary
+        if extension == ".pdf":
+            prepared_binary = _prepare_pdf(filename, binary, config)
+        elif extension in OFFICE_EXTENSIONS:
+            prepared_binary = _prepare_office(filename, binary, config)
+        elif extension == ".hwpx":
+            prepared_name, prepared_binary = _prepare_hwpx(filename, binary, config)
+        elif extension == ".hwp":
+            prepared_name, prepared_binary = _prepare_hwp(filename, binary, config)
 
-    _cache_plaintext(key, prepared_name, prepared_binary)
-    return prepared_name, prepared_binary, _public_parser_config(config)
+        _cache_plaintext(key, prepared_name, prepared_binary)
+        return prepared_name, prepared_binary, _public_parser_config(config)
+    finally:
+        _release_preparation(key, event)
 
 
 def validate_document_access(filename: str, binary: bytes, parser_config: dict | None) -> None:
     """Fail an upload early when an encrypted or Hancom document cannot be parsed."""
-    if _extension(filename) in SUPPORTED_PASSWORD_EXTENSIONS:
-        prepare_document_for_parsing(filename, binary, parser_config)
+    extension = _extension(filename)
+    config = parser_config or {}
+    if extension == ".pdf":
+        _open_encrypted_pdf(filename, binary, config)
+        return
+    if extension in OFFICE_EXTENSIONS:
+        office_file = _office_file(binary)
+        if office_file is None or not office_file.is_encrypted():
+            return
+        password = _required_password(filename, config)
+        try:
+            verified_without_decrypt = _load_office_key(office_file, password)
+            if not verified_without_decrypt:
+                _decrypt_office(office_file)
+        except Exception as exc:
+            raise DocumentPasswordError(
+                "The Office document password is incorrect or its encryption is unsupported."
+            ) from exc
+        return
+    if extension in HANCOM_EXTENSIONS:
+        prepare_document_for_parsing(filename, binary, config)
 
 
 def encrypted_pdf_page_count(filename: str, binary: bytes, parser_config: dict | None) -> int | None:

@@ -57,7 +57,7 @@ GPU로 설치한 장비는 재부팅 후 반드시 `start-gpu.ps1`을 사용합�
 
 PaddleOCR 상태는 `http://127.0.0.1:42316/health`에서 확인합니다. CPU 설치는 ONNX Runtime CPU, GPU 설치는 CUDA를 사용하며 모델은 이미지에 선탑재되어 있습니다.
 
-PDF, Office 및 HWP/HWPX의 파일 열기 비밀번호는 업로드 창에서 파일별로 입력합니다. 최신 Office와 HWPX 암호는 지원하며, 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 배포용 문서와 IRM/FASOO DRM은 처리하지 않습니다. 저장된 비밀번호 복호화에 필요한 `.env.secret`은 반드시 별도로 백업하십시오.
+PDF, Office 및 HWP/HWPX의 파일 열기 비밀번호는 업로드 창에서 파일별로 입력합니다. 최신 Office와 HWPX 암호는 지원하며, 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 배포용 문서와 IRM/FASOO DRM은 처리하지 않습니다. 저장된 비밀번호 복호화에 필요한 `.env.secret`은 DB와 같은 복구 시점으로 별도 암호화 백업하십시오. 전체 확장자 호환표와 키 회전 절차는 상위 `DOCUMENT-COMPATIBILITY.ko.md`를 따릅니다.
 
 `stop.ps1`은 컨테이너와 네트워크만 정리하며 데이터 볼륨은 삭제하지 않습니다.
 

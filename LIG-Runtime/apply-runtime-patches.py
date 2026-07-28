@@ -145,8 +145,24 @@ def main() -> None:
         text,
         "from pathlib import Path\n",
         "from pathlib import Path\n\n"
+        "from lig_runtime.document_compatibility import DocumentCompatibilityError, validate_parser_compatibility\n"
         "from lig_runtime.document_password import DocumentPasswordError, sanitize_document_response, secure_parser_config\n",
         "document API password import",
+    )
+    text = replace_once(
+        text,
+        "    # All validations passed, now perform all updates\n",
+        "    effective_pipeline_id = req.get(\"pipeline_id\", doc.pipeline_id)\n"
+        "    if not effective_pipeline_id and any(field in req for field in (\"name\", \"chunk_method\", \"parser_id\")):\n"
+        "        try:\n"
+        "            validate_parser_compatibility(\n"
+        "                req.get(\"name\", doc.name),\n"
+        "                req.get(\"chunk_method\") or req.get(\"parser_id\") or doc.parser_id,\n"
+        "            )\n"
+        "        except DocumentCompatibilityError as exc:\n"
+        "            return get_error_data_result(message=str(exc), code=RetCode.ARGUMENT_ERROR)\n\n"
+        "    # All validations passed, now perform all updates\n",
+        "validate document parser compatibility before update",
     )
     text = replace_once(
         text,
@@ -248,7 +264,9 @@ def main() -> None:
     text = replace_once(
         text,
         "import logging\n",
-        "import logging\n\nfrom lig_runtime.document_password import secure_parser_config, validate_document_access\n",
+        "import logging\n\n"
+        "from lig_runtime.document_compatibility import validate_parser_compatibility\n"
+        "from lig_runtime.document_password import secure_parser_config, validate_document_access\n",
         "file service document password import",
     )
     text = replace_once(
@@ -272,10 +290,85 @@ def main() -> None:
     )
     text = replace_once(
         text,
+        "            if e:\n"
+        "                try:\n"
+        "                    if str(doc.kb_id) != str(kb.id):\n",
+        "            if e:\n"
+        "                old_blob = None\n"
+        "                storage_updated = False\n"
+        "                try:\n"
+        "                    if str(doc.kb_id) != str(kb.id):\n",
+        "existing document atomic update state",
+    )
+    text = replace_once(
+        text,
+        "                        continue\n"
+        "                    blob = file.read()\n"
+        "                    # Connector-supplied fingerprint (e.g. xxhash128(S3 ETag))\n",
+        "                        continue\n"
+        "                    storage_location = doc.location\n"
+        "                    existing_parser_config = {**base_parser_config, **(doc.parser_config or {})}\n"
+        "                    if parser_config_override and isinstance(parser_config_override, dict):\n"
+        "                        existing_parser_config.update(parser_config_override)\n"
+        "                    submitted_password = (\n"
+        "                        document_passwords[file_index]\n"
+        "                        if document_passwords and document_passwords[file_index]\n"
+        "                        else None\n"
+        "                    )\n"
+        "                    if submitted_password:\n"
+        "                        existing_parser_config[\"document_password\"] = submitted_password\n"
+        "                    file_parser_config, _ = secure_parser_config(existing_parser_config, doc.name)\n"
+        "                    if not doc.pipeline_id:\n"
+        "                        validate_parser_compatibility(doc.name, doc.parser_id)\n"
+        "                    blob = file.read()\n"
+        "                    validate_document_access(doc.name, blob, file_parser_config)\n"
+        "                    # Connector-supplied fingerprint (e.g. xxhash128(S3 ETag))\n",
+        "existing document validation before replacement",
+    )
+    text = replace_once(
+        text,
+        "                    old_hash = doc.content_hash or \"\"\n"
+        "                    settings.STORAGE_IMPL.put(kb.id, doc.location, blob, kb.tenant_id)\n"
+        "                    doc.size = len(blob)\n"
+        "                    doc.content_hash = new_hash\n"
+        "                    doc = doc.to_dict()\n"
+        "                    DocumentService.update_by_id(doc[\"id\"], doc)\n"
+        "                    if new_hash != old_hash:\n"
+        "                        files.append((doc, blob))\n"
+        "                except Exception as exc:\n"
+        "                    logging.exception(f\"Failed to update document {doc_id}: {exc}\")\n",
+        "                    old_hash = doc.content_hash or \"\"\n"
+        "                    config_changed = file_parser_config != (doc.parser_config or {})\n"
+        "                    if new_hash == old_hash and not config_changed:\n"
+        "                        continue\n"
+        "                    old_blob = settings.STORAGE_IMPL.get(kb.id, storage_location)\n"
+        "                    settings.STORAGE_IMPL.put(kb.id, storage_location, blob, kb.tenant_id)\n"
+        "                    storage_updated = True\n"
+        "                    doc.size = len(blob)\n"
+        "                    doc.content_hash = new_hash\n"
+        "                    doc.parser_config = file_parser_config\n"
+        "                    doc = doc.to_dict()\n"
+        "                    if not DocumentService.update_by_id(doc[\"id\"], doc):\n"
+        "                        raise RuntimeError(\"Failed to persist the updated document metadata.\")\n"
+        "                    files.append((doc, blob))\n"
+        "                except Exception as exc:\n"
+        "                    if storage_updated and old_blob is not None:\n"
+        "                        try:\n"
+        "                            settings.STORAGE_IMPL.put(kb.id, storage_location, old_blob, kb.tenant_id)\n"
+        "                        except Exception:\n"
+        "                            logging.exception(\"Failed to restore document storage after update failure\")\n"
+        "                    logging.exception(f\"Failed to update document {doc_id}: {exc}\")\n",
+        "atomic existing document replacement",
+    )
+    text = replace_once(
+        text,
         "                blob = file.read()\n"
         "                if filetype == FileType.PDF.value:\n"
         "                    blob = read_potential_broken_pdf(blob)\n",
         "                blob = file.read()\n"
+        "                parser_id = self.get_parser(filetype, filename, kb.parser_id)\n"
+        "                if not kb.pipeline_id:\n"
+        "                    validate_parser_compatibility(filename, parser_id)\n"
         "                validate_document_access(filename, blob, file_parser_config)\n"
         "                if filetype == FileType.PDF.value:\n"
         "                    blob = read_potential_broken_pdf(blob)\n",
@@ -286,6 +379,12 @@ def main() -> None:
         '                    "parser_config": merged_parser_config,\n',
         '                    "parser_config": file_parser_config,\n',
         "store per-file password configuration",
+    )
+    text = replace_once(
+        text,
+        '                    "parser_id": self.get_parser(filetype, filename, kb.parser_id),\n',
+        '                    "parser_id": parser_id,\n',
+        "reuse validated parser id",
     )
     file_service_target.write_text(text, encoding="utf-8")
 
@@ -301,6 +400,20 @@ def main() -> None:
         "        if pages is None:\n"
         "            pages = PdfParser.total_page_number(doc[\"name\"], file_bin)\n",
         "encrypted PDF task page count",
+    )
+    text = replace_once(
+        text,
+        "    elif doc[\"parser_id\"] == \"table\":\n"
+        "        file_bin = settings.STORAGE_IMPL.get(bucket, name)\n"
+        "        rn = RAGFlowExcelParser.row_number(doc[\"name\"], file_bin)\n",
+        "    elif doc[\"parser_id\"] == \"table\":\n"
+        "        file_bin = settings.STORAGE_IMPL.get(bucket, name)\n"
+        "        from lig_runtime.document_password import prepare_document_for_parsing\n\n"
+        "        prepared_name, file_bin, _ = prepare_document_for_parsing(\n"
+        "            doc[\"name\"], file_bin, doc.get(\"parser_config\")\n"
+        "        )\n"
+        "        rn = RAGFlowExcelParser.row_number(prepared_name, file_bin)\n",
+        "encrypted table task row count",
     )
     task_service_target.write_text(text, encoding="utf-8")
 

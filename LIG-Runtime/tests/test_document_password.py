@@ -3,13 +3,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import time
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pypdf import PdfReader, PdfWriter
 
+import lig_runtime.document_password as document_password_module
+from lig_runtime.document_key_rotation import audit_configs, keyring_fingerprint
 from lig_runtime.document_password import (
     LEGACY_STORAGE_FIELD,
     PASSWORD_CLEAR_FIELD,
@@ -30,6 +35,12 @@ def password_key(monkeypatch):
     encoded = base64.b64encode(bytes(range(32))).decode("ascii")
     monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY", encoded)
     monkeypatch.setenv("LIG_PDF_PASSWORD_KEY", encoded)
+    monkeypatch.delenv("LIG_DOCUMENT_PASSWORD_KEY_ID", raising=False)
+    monkeypatch.delenv("LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS", raising=False)
+    with document_password_module._decrypt_cache_lock:
+        document_password_module._decrypt_cache.clear()
+        document_password_module._decrypt_cache_size = 0
+        document_password_module._decrypt_inflight.clear()
 
 
 def encrypted_pdf(user_password: str, owner_password: str | None = None, algorithm: str = "AES-256") -> bytes:
@@ -41,7 +52,7 @@ def encrypted_pdf(user_password: str, owner_password: str | None = None, algorit
     return output.getvalue()
 
 
-def encrypted_office_zip(password: str, extension: str = "docx") -> bytes:
+def encrypted_office_zip(password: str, extension: str = "docx", label: str = "RAG-LIG") -> bytes:
     pytest.importorskip("msoffcrypto")
     from msoffcrypto.format.ooxml import OOXMLFile
 
@@ -51,14 +62,16 @@ def encrypted_office_zip(password: str, extension: str = "docx") -> bytes:
         from docx import Document
 
         document = Document()
-        document.add_paragraph("RAG-LIG Word test")
+        document.add_paragraph(f"{label} Word test")
         document.save(plain)
     elif extension == "xlsx":
         pytest.importorskip("openpyxl")
         from openpyxl import Workbook
 
         workbook = Workbook()
-        workbook.active["A1"] = "RAG-LIG Excel test"
+        workbook.active.append(["Name", "Value"])
+        workbook.active.append([f"{label} Excel test", 42])
+        workbook.active.append(["Second row", 84])
         workbook.save(plain)
     elif extension == "pptx":
         pytest.importorskip("pptx")
@@ -66,7 +79,7 @@ def encrypted_office_zip(password: str, extension: str = "docx") -> bytes:
 
         presentation = Presentation()
         slide = presentation.slides.add_slide(presentation.slide_layouts[5])
-        slide.shapes.title.text = "RAG-LIG PowerPoint test"
+        slide.shapes.title.text = f"{label} PowerPoint test"
         presentation.save(plain)
     else:
         raise AssertionError(f"unsupported test extension: {extension}")
@@ -191,12 +204,12 @@ def test_encrypted_and_plain_hwpx_are_extracted_to_text():
         "secure.hwpx", encrypted, secured("secure.hwpx", "hwpx-password")
     )
     assert name == "secure.hwpx.txt"
-    assert plaintext.decode() == "암호화 HWPX 본문\n두 번째 문단"
+    assert plaintext.decode() == "암호화 HWPX 본문\n\n두 번째 문단"
     assert PASSWORD_STORAGE_FIELD not in parser_config
 
     plain_name, plain_text, _ = prepare_document_for_parsing("plain.hwpx", hwpx_document(None), {})
     assert plain_name == "plain.hwpx.txt"
-    assert plain_text.decode() == "암호화 HWPX 본문\n두 번째 문단"
+    assert plain_text.decode() == "암호화 HWPX 본문\n\n두 번째 문단"
 
 
 def test_hwpx_wrong_or_missing_password():
@@ -246,3 +259,182 @@ def test_password_rejected_for_unrelated_file_type_and_plain_office_is_unchanged
     assert name == "plain.docx"
     assert binary == plain.getvalue()
     assert PASSWORD_STATUS_FIELD not in config
+
+
+def test_resubmitting_the_same_password_keeps_the_active_token():
+    config = secured("same.docx", "unchanged")
+    updated, changed = secure_parser_config(
+        {**config, PASSWORD_INPUT_FIELD: "unchanged"},
+        "same.docx",
+    )
+    assert changed is False
+    assert updated[PASSWORD_STORAGE_FIELD] == config[PASSWORD_STORAGE_FIELD]
+
+
+def test_hwpx_resource_limits_reject_manifest_entry_count_and_pbkdf_work(monkeypatch):
+    monkeypatch.setattr(document_password_module, "_MAX_HWPX_MANIFEST_SIZE", 32)
+    with pytest.raises(DocumentPasswordError, match="manifest.xml is too large"):
+        prepare_document_for_parsing("limited.hwpx", hwpx_document(None), {})
+
+    monkeypatch.setattr(document_password_module, "_MAX_HWPX_MANIFEST_SIZE", 4 * 1024 * 1024)
+    monkeypatch.setattr(document_password_module, "_MAX_HWPX_ARCHIVE_ENTRIES", 2)
+    with pytest.raises(DocumentPasswordError, match="too many entries"):
+        prepare_document_for_parsing("limited.hwpx", hwpx_document(None), {})
+
+    monkeypatch.setattr(document_password_module, "_MAX_HWPX_ARCHIVE_ENTRIES", 4096)
+    monkeypatch.setattr(document_password_module, "_MAX_HWPX_PBKDF_ITERATIONS", 100)
+    with pytest.raises(DocumentPasswordError, match="parameters are outside"):
+        prepare_document_for_parsing("limited.hwpx", hwpx_document("password"), secured("limited.hwpx", "password"))
+
+
+def test_hwp_input_size_is_bounded_before_ole_parsing(monkeypatch):
+    monkeypatch.setattr(document_password_module, "_MAX_HWP_FILE_SIZE", 4)
+    with pytest.raises(DocumentPasswordError, match="too large"):
+        prepare_document_for_parsing("oversized.hwp", b"12345", {})
+
+
+def test_malformed_hwp_and_hwpx_are_rejected_cleanly():
+    with pytest.raises(DocumentPasswordError, match="valid HWP 5"):
+        prepare_document_for_parsing("damaged.hwp", b"not-an-ole-file", {})
+    with pytest.raises(DocumentPasswordError, match="valid ZIP"):
+        prepare_document_for_parsing("damaged.hwpx", b"not-a-zip-file", {})
+
+    malformed_xml = io.BytesIO()
+    with ZipFile(malformed_xml, "w", ZIP_STORED) as archive:
+        archive.writestr("mimetype", "application/hwp+zip")
+        archive.writestr("Contents/section0.xml", b"<broken>")
+        archive.writestr(
+            "META-INF/manifest.xml",
+            '<?xml version="1.0"?><manifest xmlns="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>',
+        )
+    with pytest.raises(DocumentPasswordError, match="body XML is invalid"):
+        prepare_document_for_parsing("damaged.hwpx", malformed_xml.getvalue(), {})
+
+
+def test_hwpx_extracts_markdown_table_notes_and_embedded_object_inventory():
+    section = b'''<?xml version="1.0" encoding="UTF-8"?>
+      <hs:sec xmlns:hs="urn:hancom:section" xmlns:hp="urn:hancom:paragraph">
+        <hp:p><hp:run><hp:t>Introduction</hp:t></hp:run></hp:p>
+        <hp:tbl>
+          <hp:tr><hp:tc><hp:p><hp:run><hp:t>Name</hp:t></hp:run></hp:p></hp:tc><hp:tc><hp:p><hp:run><hp:t>Value</hp:t></hp:run></hp:p></hp:tc></hp:tr>
+          <hp:tr><hp:tc><hp:p><hp:run><hp:t>Alpha</hp:t></hp:run></hp:p></hp:tc><hp:tc><hp:p><hp:run><hp:t>42</hp:t></hp:run></hp:p></hp:tc></hp:tr>
+        </hp:tbl>
+        <hp:p><hp:footNote><hp:run><hp:t>Reference note</hp:t></hp:run></hp:footNote></hp:p>
+      </hs:sec>'''
+    output = io.BytesIO()
+    with ZipFile(output, "w", ZIP_STORED) as archive:
+        archive.writestr("mimetype", "application/hwp+zip")
+        archive.writestr("Contents/section0.xml", section)
+        archive.writestr(
+            "META-INF/manifest.xml",
+            '<?xml version="1.0"?><manifest xmlns="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>',
+        )
+        archive.writestr("BinData/image.png", b"image")
+
+    _, plaintext, _ = prepare_document_for_parsing("structured.hwpx", output.getvalue(), {})
+    text = plaintext.decode()
+    assert "| Name | Value |" in text
+    assert "| Alpha | 42 |" in text
+    assert "[Footnote] Reference note" in text
+    assert "[Embedded object: BinData/image.png]" in text
+
+
+def test_plain_office_is_not_cached_and_hwpx_preparation_is_single_flight(monkeypatch):
+    with document_password_module._decrypt_cache_lock:
+        document_password_module._decrypt_cache.clear()
+        document_password_module._decrypt_cache_size = 0
+        document_password_module._decrypt_inflight.clear()
+
+    plain_office = io.BytesIO()
+    with ZipFile(plain_office, "w") as archive:
+        archive.writestr("word/document.xml", "plain")
+    prepare_document_for_parsing("plain.docx", plain_office.getvalue(), {})
+    assert not document_password_module._decrypt_cache
+
+    binary = hwpx_document(None)
+    original = document_password_module._prepare_hwpx
+    calls = 0
+
+    def counted_prepare(filename, payload, config):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        return original(filename, payload, config)
+
+    monkeypatch.setattr(document_password_module, "_prepare_hwpx", counted_prepare)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: prepare_document_for_parsing("parallel.hwpx", binary, {}), range(8)))
+    assert calls == 1
+    assert len({result[1] for result in results}) == 1
+
+
+def test_decryption_cache_entries_expire(monkeypatch):
+    now = 100.0
+    monkeypatch.setattr(document_password_module, "monotonic", lambda: now)
+    binary = hwpx_document(None)
+    prepare_document_for_parsing("ttl.hwpx", binary, {})
+    key = document_password_module._cache_key(binary, None, ".hwpx")
+    assert document_password_module._cached_plaintext(key) is not None
+    now += document_password_module._DECRYPT_CACHE_TTL_SECONDS + 1
+    assert document_password_module._cached_plaintext(key) is None
+
+
+def test_key_rotation_rewraps_with_active_key_and_keeps_document_readable(monkeypatch):
+    old_key = base64.b64encode(bytes(range(32))).decode()
+    new_key = base64.b64encode(bytes(reversed(range(32)))).decode()
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY_ID", "old")
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY", old_key)
+    config = secured("rotated.docx", "rotation-password")
+    assert config[PASSWORD_STORAGE_FIELD].startswith("v3:old:")
+
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY_ID", "new")
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY", new_key)
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS", f"old:{old_key}")
+    rewrapped, changed = document_password_module.rewrap_parser_config(config)
+    assert changed is True
+    assert rewrapped[PASSWORD_STORAGE_FIELD].startswith("v3:new:")
+    assert document_password_module._unseal(rewrapped[PASSWORD_STORAGE_FIELD]) == "rotation-password"
+
+    monkeypatch.delenv("LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS")
+    assert document_password_module._unseal(rewrapped[PASSWORD_STORAGE_FIELD]) == "rotation-password"
+
+
+def test_key_rotation_requires_the_referenced_previous_key(monkeypatch):
+    old_key = base64.b64encode(bytes(range(32))).decode()
+    new_key = base64.b64encode(bytes(reversed(range(32)))).decode()
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY_ID", "old")
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY", old_key)
+    config = secured("rotated.docx", "rotation-password")
+
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY_ID", "new")
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY", new_key)
+    with pytest.raises(DocumentPasswordError, match="is not configured"):
+        document_password_module.rewrap_parser_config(config)
+
+
+def test_key_rotation_migrates_v2_tokens_and_audits_bad_records(monkeypatch):
+    old_key_bytes = bytes(range(32))
+    old_key = base64.b64encode(old_key_bytes).decode()
+    new_key = base64.b64encode(bytes(reversed(range(32)))).decode()
+    nonce = bytes(range(12))
+    ciphertext = AESGCM(old_key_bytes).encrypt(
+        nonce,
+        b"legacy-v2-password",
+        document_password_module._AAD,
+    )
+    legacy_config = {
+        PASSWORD_STORAGE_FIELD: "v2:" + base64.b64encode(nonce + ciphertext).decode()
+    }
+
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY_ID", "new")
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_KEY", new_key)
+    monkeypatch.setenv("LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS", f"old:{old_key}")
+    updates, errors = audit_configs(
+        [("legacy", legacy_config), ("bad", {PASSWORD_STORAGE_FIELD: "v3:missing:not-base64"})]
+    )
+
+    assert errors and errors[0].startswith("bad:")
+    assert updates[0][0] == "legacy"
+    assert updates[0][1][PASSWORD_STORAGE_FIELD].startswith("v3:new:")
+    assert document_password_module._unseal(updates[0][1][PASSWORD_STORAGE_FIELD]) == "legacy-v2-password"
+    assert keyring_fingerprint()["configured_key_ids"] == ["new", "old"]
