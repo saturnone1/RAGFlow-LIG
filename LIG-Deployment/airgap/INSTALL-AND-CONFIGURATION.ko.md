@@ -29,13 +29,14 @@ cd D:\LIG-RAGFlow-Airgap-20260728
 .\install.ps1
 
 # 또는 NVIDIA GPU DeepDoc 설치
+# (-IncludeGpu로 생성한 번들에서만 가능)
 .\install-gpu.ps1
 ```
 
 설치 프로그램은 다음 작업을 자동 수행합니다.
 
 1. manifest와 모든 파일의 SHA-256 검증
-2. CPU 및 CUDA 12.8 GPU Docker 이미지가 포함된 gzip 아카이브 로드
+2. CPU Docker 이미지와 번들 생성 시 선택한 GPU 이미지가 포함된 gzip 아카이브 로드
 3. `.env.secret` 예제 생성
 4. 로그와 MCP 파일 교환 폴더 생성
 5. RAGFlow, 한국어 PaddleOCR, Infinity, MySQL, MinIO, Valkey, 공식 MCP, LIG 관리 MCP 시작
@@ -143,7 +144,7 @@ RAGFlow 컨테이너에서 `127.0.0.1`은 대상 Windows 호스트나 별도 vLL
 
 새 embedding 모델을 선택한 뒤 기존 데이터셋에 다른 모델의 벡터를 섞지 마십시오. 모델이나 벡터 차원이 변경되면 새 데이터셋으로 시험하거나 기존 데이터셋을 재인덱싱해야 합니다.
 
-사내 embedding endpoint가 없다면 번들에 동봉된 선택형 CPU 서비스를 설치합니다.
+사내 embedding endpoint가 없고 번들을 `-IncludeEmbedding` 옵션으로 만들었다면 동봉된 선택형 CPU 서비스를 설치합니다.
 
 ```powershell
 .\install-embedding-cpu.ps1

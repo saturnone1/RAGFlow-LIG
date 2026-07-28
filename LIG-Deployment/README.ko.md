@@ -134,6 +134,8 @@ TASK_EXECUTOR_WORKERS=2
 
 문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로는 LIG 이미지의 60초 공급자 요청 제한을 기준으로 embedding batch를 2로 설정합니다. 요청 단위 조정이며 자원 상한은 아닙니다. 설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`는 값이 양의 정수인지 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
 
+내부 PaddleOCR는 기본적으로 업로드 256 MiB, PDF 2,000쪽, 페이지당 렌더링 5천만 픽셀, 활성 작업 8개로 제한하며 임시 디스크 512 MiB를 남깁니다. `PADDLEOCR_MAX_UPLOAD_BYTES`, `PADDLEOCR_MAX_PDF_PAGES`, `PADDLEOCR_MAX_PAGE_PIXELS`, `PADDLEOCR_MAX_PENDING_JOBS`, `PADDLEOCR_MIN_FREE_BYTES`로 조정할 수 있습니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 TTL 정리 대상에서 제외합니다. 내부 Bearer 토큰은 최초 `config`/`start` 때 `.env.secret`에 자동 생성되며 미설정 상태로는 OCR 서비스가 시작되지 않습니다.
+
 1. `diagnostics`의 task executor heartbeat 수가 설정값과 일치하는지 확인합니다.
 2. UI의 문서 처리 상세에서 현재 단계와 실제 `process_duration`을 확인합니다.
 3. 진단 결과의 `RecentStageTimings`에서 `Chunk doc`, `Indexing doc`, 전체 `Done` 소요시간을 비교합니다.
@@ -173,13 +175,13 @@ Windows의 Docker VHDX는 내부 데이터를 지워도 파일 크기가 즉시 
 
 RAGFlow 기본 이미지는 임베딩 모델을 포함하지 않습니다. 이 배포는 Apache-2.0의 `Qwen/Qwen3-Embedding-0.6B`를 커밋 `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`으로 고정하고 TEI `cpu-1.9` 이미지에 포함합니다. 모델은 100개 이상 언어와 1024차원 벡터를 지원합니다. 운영 설정은 RAGFlow 청크 처리에 맞춰 요청당 최대 2,048 토큰으로 자동 절단하며, 검색 질의에만 Qwen 권장 instruction을 붙이고 문서 청크는 원문 그대로 임베딩합니다.
 
-에어갭 반입 폴더에는 CPU 이미지와 CUDA 12.8 GPU 이미지를 함께 담은 기본 런타임 아카이브와 선택형 Qwen3 임베딩 아카이브가 각각 gzip으로 들어갑니다. `install.ps1`과 `install-gpu.ps1`은 기본 런타임을 로드하되 각 프로필에 맞는 이미지만 실행하며, 사용자가 `install-embedding-cpu.ps1`을 추가 실행할 때만 Qwen3 아카이브를 로드하고 서비스를 시작합니다.
+에어갭 반입 폴더의 기본 런타임 아카이브에는 CPU 이미지가 들어갑니다. CUDA 12.8 GPU 이미지는 `-IncludeGpu`, Qwen3 임베딩 아카이브는 `-IncludeEmbedding`을 지정한 경우에만 추가됩니다. 각 선택 이미지를 포함한 번들에서만 `install-gpu.ps1` 또는 `install-embedding-cpu.ps1`을 사용할 수 있습니다.
 
-온라인 PC에서 먼저 `build`, `gpu-build`, `embedding-build`를 완료한 뒤 반입 묶음을 만듭니다. 결과 폴더에는 CPU/GPU 커스텀 UI와 PaddleOCR, LIG 관리 MCP를 포함한 고정 버전 이미지, 공식 Compose 런타임, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
+온라인 PC에서 먼저 `build`를 완료한 뒤 반입 묶음을 만듭니다. GPU를 동봉할 때만 `gpu-build`와 `-IncludeGpu`, 임베딩을 동봉할 때만 `embedding-build`와 `-IncludeEmbedding`이 필요합니다. 결과 폴더에는 선택한 고정 버전 이미지, 공식 Compose 런타임, 문서 호환성·키 회전 자료, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
 내보내기 대상은 기존 파일이나 비밀값이 섞이지 않은 빈 폴더여야 합니다.
 
 ```powershell
-.\airgap-export.ps1 -Destination D:\LIG-RAGFlow-Airgap
+.\airgap-export.ps1 -Destination D:\LIG-RAGFlow-Airgap -IncludeEmbedding
 ```
 
 생성된 `D:\LIG-RAGFlow-Airgap` 폴더 전체를 폐쇄망 PC로 복사한 후 Docker Desktop을 시작하고 다음 한 줄로 설치합니다.

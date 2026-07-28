@@ -480,12 +480,12 @@ write('src/interfaces/request/document.ts', content);
 
 content = read('src/components/chunk-method-dialog/index.tsx');
 content =
-  "import { supportsPasswordExtension } from '@/brand/document-password';\n" +
+  "import { documentPasswordSchema, supportsPasswordExtension } from '@/brand/document-password';\n" +
   content;
 content = replaceOnce(
   content,
   "        task_page_size: z.coerce.number().optional(),",
-  "        task_page_size: z.coerce.number().optional(),\n        document_password: z.string().max(1024).optional(),\n        clear_document_password: z.boolean().optional(),",
+  "        task_page_size: z.coerce.number().optional(),\n        document_password: documentPasswordSchema.optional(),\n        clear_document_password: z.boolean().optional(),",
   'document password form schema',
 );
 content = replaceOnce(

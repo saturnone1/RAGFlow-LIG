@@ -9,7 +9,7 @@ public sealed class RagFlowTools
     public RagFlowTools(RagFlowClient client, RagFlowSettings settings) { _client = client; _settings = settings; }
 
     [McpServerTool(ReadOnly = true), Description("Check the RAGFlow endpoint and adapter configuration without exposing the API key.")]
-    public Task<object> RagFlowConfig() => _client.HealthAsync();
+    public Task<RagFlowHealth> RagFlowConfig() => _client.HealthAsync();
 
     [McpServerTool(ReadOnly = true), Description("List the RAGFlow v0.26.4 API areas and routes available through the generic MCP API tools.")]
     public object RagFlowApiCatalog() => global::RagFlowApiCatalog.Describe();

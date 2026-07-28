@@ -7,6 +7,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Invoke-Docker([string[]]$Arguments) {
+    $previous = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($exitCode -ne 0) { throw "docker failed with exit code $exitCode" }
+}
 $sourcePath = [IO.Path]::GetFullPath($Source)
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) { throw "Source directory not found: $sourcePath" }
 $imageArchive = Join-Path $sourcePath "lig-ragflow-images-v0.26.4.tar.gz"
@@ -14,14 +25,11 @@ $manifestPath = Join-Path $sourcePath "manifest.json"
 foreach ($file in @($imageArchive, $manifestPath)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required archive not found: $file" } }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 7) {
+if ($manifest.bundleFormat -ne 8) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
 if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-1") {
     throw "Unsupported or missing UI image in manifest: $($manifest.uiImage)"
-}
-if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-1") {
-    throw "Unsupported or missing GPU UI image in manifest: $($manifest.gpuUiImage)"
 }
 if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-1") {
     throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
@@ -29,18 +37,16 @@ if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-1") {
 if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-1") {
     throw "Unsupported or missing Korean OCR image in manifest: $($manifest.ocrImage)"
 }
-if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-1") {
-    throw "Unsupported or missing GPU Korean OCR image in manifest: $($manifest.gpuOcrImage)"
-}
-foreach ($requiredImage in @($manifest.uiImage, $manifest.gpuUiImage, $manifest.mcpImage, $manifest.ocrImage, $manifest.gpuOcrImage)) {
+foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
     if ($requiredImage -notin @($manifest.images)) { throw "Required image is absent from manifest images: $requiredImage" }
 }
-if ($manifest.embeddingModel -ne "Qwen/Qwen3-Embedding-0.6B") {
-    throw "Unsupported or missing optional embedding model in manifest: $($manifest.embeddingModel)"
-}
-$expectedEmbeddingImages = @("lig/qwen3-embedding-tei:0.6b-1", "lig/qwen3-embedding-adapter:0.6b-1")
-if ((@($manifest.embeddingImages | Sort-Object) -join "`n") -ne (@($expectedEmbeddingImages | Sort-Object) -join "`n")) {
-    throw "Optional embedding image list is missing or unsupported."
+if ($Device -eq "gpu") {
+    if (-not $manifest.gpuIncluded) { throw "This bundle does not include GPU images. Export it again with -IncludeGpu." }
+    if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-1") { throw "Unsupported GPU UI image: $($manifest.gpuUiImage)" }
+    if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-1") { throw "Unsupported GPU OCR image: $($manifest.gpuOcrImage)" }
+    foreach ($requiredImage in @($manifest.gpuUiImage, $manifest.gpuOcrImage)) {
+        if ($requiredImage -notin @($manifest.images)) { throw "Required GPU image is absent from manifest images: $requiredImage" }
+    }
 }
 foreach ($record in $manifest.files) {
     $file = [IO.Path]::GetFullPath((Join-Path $sourcePath ([string]$record.file)))
@@ -60,18 +66,19 @@ if ($LASTEXITCODE -ne 0) { throw "Docker Engine is not available. Start Docker D
 & docker compose version *> $null
 if ($LASTEXITCODE -ne 0) { throw "Docker Compose v2 is not available." }
 
-docker load --input $imageArchive
-if ($LASTEXITCODE -ne 0) { throw "docker load failed" }
+Invoke-Docker @("load", "--input", $imageArchive)
 docker image inspect $manifest.uiImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Custom UI image was not loaded: $($manifest.uiImage)" }
-docker image inspect $manifest.gpuUiImage *> $null
-if ($LASTEXITCODE -ne 0) { throw "GPU UI image was not loaded: $($manifest.gpuUiImage)" }
 docker image inspect $manifest.mcpImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Management MCP image was not loaded: $($manifest.mcpImage)" }
 docker image inspect $manifest.ocrImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Korean PaddleOCR image was not loaded: $($manifest.ocrImage)" }
-docker image inspect $manifest.gpuOcrImage *> $null
-if ($LASTEXITCODE -ne 0) { throw "GPU Korean PaddleOCR image was not loaded: $($manifest.gpuOcrImage)" }
+if ($manifest.gpuIncluded) {
+    docker image inspect $manifest.gpuUiImage *> $null
+    if ($LASTEXITCODE -ne 0) { throw "GPU UI image was not loaded: $($manifest.gpuUiImage)" }
+    docker image inspect $manifest.gpuOcrImage *> $null
+    if ($LASTEXITCODE -ne 0) { throw "GPU Korean PaddleOCR image was not loaded: $($manifest.gpuOcrImage)" }
+}
 if (-not $manifest.imageIds) { throw "Manifest image IDs are missing." }
 foreach ($image in @($manifest.images)) {
     $expectedIdProperty = $manifest.imageIds.PSObject.Properties[[string]$image]
@@ -84,16 +91,19 @@ foreach ($image in @($manifest.images)) {
 
 if ($Device -eq "gpu") {
     Write-Host "Validating NVIDIA GPU access from the RAGFlow image..."
-    docker run --rm --gpus all --entrypoint nvidia-smi $manifest.gpuUiImage --query-gpu=name,memory.total,driver_version --format=csv,noheader
-    if ($LASTEXITCODE -ne 0) {
+    try {
+        Invoke-Docker @("run", "--rm", "--gpus", "all", "--entrypoint", "nvidia-smi", $manifest.gpuUiImage, "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader")
+    } catch {
         throw "NVIDIA GPU validation failed. Install a supported NVIDIA driver and NVIDIA Container Toolkit, enable GPU access in Docker Desktop, and retry."
     }
-    docker run --rm --gpus all --entrypoint /ragflow/.venv/bin/python $manifest.gpuUiImage -c "import ctypes; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; session=ort.InferenceSession('/ragflow/rag/res/deepdoc/layout.onnx', providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'DeepDoc CUDA provider unavailable: {providers}'; print('DeepDoc ONNX provider:', providers[0])"
-    if ($LASTEXITCODE -ne 0) {
+    try {
+        Invoke-Docker @("run", "--rm", "--gpus", "all", "--entrypoint", "/ragflow/.venv/bin/python", $manifest.gpuUiImage, "-c", "import ctypes; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; session=ort.InferenceSession('/ragflow/rag/res/deepdoc/layout.onnx', providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'DeepDoc CUDA provider unavailable: {providers}'; print('DeepDoc ONNX provider:', providers[0])")
+    } catch {
         throw "The GPU is visible, but DeepDoc could not create a CUDA ONNX session. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }
-    docker run --rm --gpus all --entrypoint /ragflow/.venv/bin/python $manifest.gpuOcrImage -c "from pathlib import Path; import ctypes, rapidocr; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; assert Path('/dev/nvidiactl').exists(), 'NVIDIA device is unavailable'; model=Path(rapidocr.__file__).resolve().parent/'models'/'korean_PP-OCRv5_rec_mobile.onnx'; session=ort.InferenceSession(str(model), providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'PaddleOCR CUDA provider unavailable: {providers}'; print('PaddleOCR ONNX provider:', providers[0])"
-    if ($LASTEXITCODE -ne 0) {
+    try {
+        Invoke-Docker @("run", "--rm", "--gpus", "all", "--entrypoint", "/ragflow/.venv/bin/python", $manifest.gpuOcrImage, "-c", "from pathlib import Path; import ctypes, rapidocr; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; assert Path('/dev/nvidiactl').exists(), 'NVIDIA device is unavailable'; model=Path(rapidocr.__file__).resolve().parent/'models'/'korean_PP-OCRv5_rec_mobile.onnx'; session=ort.InferenceSession(str(model), providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'PaddleOCR CUDA provider unavailable: {providers}'; print('PaddleOCR ONNX provider:', providers[0])")
+    } catch {
         throw "The GPU is visible, but the PaddleOCR image cannot use CUDAExecutionProvider. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }
 }
@@ -103,39 +113,6 @@ if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot ".env.secret.example") -Destination $secretFile
     Write-Warning "Created LIG-Deployment\.env.secret from the example. Replace its placeholder API key after creating a RAGFlow API key."
 }
-$secretLines = @(Get-Content -LiteralPath $secretFile)
-$documentKeyIndex = -1
-$legacyKeyIndex = -1
-for ($index = 0; $index -lt $secretLines.Count; $index++) {
-    if ($secretLines[$index] -match '^\s*LIG_DOCUMENT_PASSWORD_KEY=') { $documentKeyIndex = $index }
-    if ($secretLines[$index] -match '^\s*LIG_PDF_PASSWORD_KEY=') { $legacyKeyIndex = $index }
-}
-$documentKeyValue = if ($documentKeyIndex -ge 0) { ($secretLines[$documentKeyIndex] -split '=', 2)[1].Trim() } else { "" }
-if (([string]::IsNullOrWhiteSpace($documentKeyValue) -or $documentKeyValue -eq "generate-a-base64-encoded-32-byte-key") -and $legacyKeyIndex -ge 0) {
-    $legacyKeyValue = ($secretLines[$legacyKeyIndex] -split '=', 2)[1].Trim()
-    if (-not [string]::IsNullOrWhiteSpace($legacyKeyValue) -and $legacyKeyValue -ne "generate-a-base64-encoded-32-byte-key") {
-        if ($documentKeyIndex -ge 0) { $secretLines[$documentKeyIndex] = "LIG_DOCUMENT_PASSWORD_KEY=$legacyKeyValue" }
-        else { $secretLines[$legacyKeyIndex] = "LIG_DOCUMENT_PASSWORD_KEY=$legacyKeyValue"; $documentKeyIndex = $legacyKeyIndex; $legacyKeyIndex = -1 }
-        $documentKeyValue = $legacyKeyValue
-    }
-}
-if ([string]::IsNullOrWhiteSpace($documentKeyValue) -or $documentKeyValue -eq "generate-a-base64-encoded-32-byte-key") {
-    $keyBytes = New-Object byte[] 32
-    $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $generator.GetBytes($keyBytes) }
-    finally { $generator.Dispose() }
-    $keyLine = "LIG_DOCUMENT_PASSWORD_KEY=$([Convert]::ToBase64String($keyBytes))"
-    if ($documentKeyIndex -ge 0) { $secretLines[$documentKeyIndex] = $keyLine } else { $secretLines += $keyLine }
-    Write-Host "Generated the local document password encryption key."
-}
-if ($legacyKeyIndex -ge 0) { $secretLines = @($secretLines | Where-Object { $_ -notmatch '^\s*LIG_PDF_PASSWORD_KEY=' }) }
-if (-not ($secretLines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_KEY_ID=' })) {
-    $secretLines += "LIG_DOCUMENT_PASSWORD_KEY_ID=primary"
-}
-if (-not ($secretLines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS=' })) {
-    $secretLines += "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS="
-}
-[IO.File]::WriteAllLines($secretFile, $secretLines, [Text.UTF8Encoding]::new($false))
 $logDirectory = Join-Path $PSScriptRoot "ragflow-logs"
 if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
     New-Item -ItemType Directory -Path $logDirectory | Out-Null

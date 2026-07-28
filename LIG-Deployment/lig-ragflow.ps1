@@ -47,6 +47,7 @@ $composeArguments += @(
 )
 
 function Invoke-Compose([string[]]$Arguments) {
+    Ensure-LigSecrets
     $dockerExecutable = (Get-Command docker -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $previousErrorActionPreference = $ErrorActionPreference
     $dockerExitCode = 1
@@ -64,6 +65,21 @@ function Invoke-Compose([string[]]$Arguments) {
     if ($dockerExitCode -ne 0) {
         throw "docker compose failed with exit code $dockerExitCode"
     }
+}
+
+function Invoke-Docker([string[]]$Arguments) {
+    $dockerExecutable = (Get-Command docker -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $previousErrorActionPreference = $ErrorActionPreference
+    $dockerExitCode = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        & $dockerExecutable @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $dockerExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($dockerExitCode -ne 0) { throw "docker failed with exit code $dockerExitCode" }
 }
 
 function Assert-FreeSpace {
@@ -93,7 +109,7 @@ function Get-ConfigurationValue([hashtable]$Configuration, [string]$Name, [strin
     return $Default
 }
 
-function New-DocumentPasswordKey {
+function New-RandomSecret {
     $bytes = New-Object byte[] 32
     $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
     try { $generator.GetBytes($bytes) }
@@ -101,7 +117,7 @@ function New-DocumentPasswordKey {
     return [Convert]::ToBase64String($bytes)
 }
 
-function Ensure-DocumentPasswordKey {
+function Ensure-LigSecrets {
     if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
         Copy-Item -LiteralPath (Join-Path $deploymentDirectory ".env.secret.example") -Destination $secretFile
     }
@@ -123,7 +139,7 @@ function Ensure-DocumentPasswordKey {
         }
     }
     if ([string]::IsNullOrWhiteSpace($currentValue) -or $currentValue -eq "generate-a-base64-encoded-32-byte-key") {
-        $keyLine = "LIG_DOCUMENT_PASSWORD_KEY=$(New-DocumentPasswordKey)"
+        $keyLine = "LIG_DOCUMENT_PASSWORD_KEY=$(New-RandomSecret)"
         if ($keyLineIndex -ge 0) { $lines[$keyLineIndex] = $keyLine } else { $lines += $keyLine }
         Write-Host "Generated the local document password encryption key in LIG-Deployment\.env.secret."
     }
@@ -134,18 +150,28 @@ function Ensure-DocumentPasswordKey {
     if (-not ($lines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS=' })) {
         $lines += "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS="
     }
+    $ocrTokenLineIndex = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match '^\s*PADDLEOCR_INTERNAL_TOKEN=') { $ocrTokenLineIndex = $index }
+    }
+    $ocrToken = if ($ocrTokenLineIndex -ge 0) { ($lines[$ocrTokenLineIndex] -split '=', 2)[1].Trim() } else { "" }
+    if ([string]::IsNullOrWhiteSpace($ocrToken) -or $ocrToken -eq "replace-with-a-random-internal-token") {
+        $ocrTokenLine = "PADDLEOCR_INTERNAL_TOKEN=$(New-RandomSecret)"
+        if ($ocrTokenLineIndex -ge 0) { $lines[$ocrTokenLineIndex] = $ocrTokenLine } else { $lines += $ocrTokenLine }
+        Write-Host "Generated the internal PaddleOCR bearer token in LIG-Deployment\.env.secret."
+    }
     [IO.File]::WriteAllLines($secretFile, $lines, [Text.UTF8Encoding]::new($false))
 }
 
 function Assert-LigConfiguration {
-    Ensure-DocumentPasswordKey
+    Ensure-LigSecrets
     $configuration = Get-EnvFileValues $ligEnvFile
     $workerValue = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "1"
     $workers = 0
     if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1) {
         throw "TASK_EXECUTOR_WORKERS must be a positive integer. Current value: $workerValue"
     }
-    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS")) {
+    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_MAX_UPLOAD_BYTES", "PADDLEOCR_MAX_PDF_PAGES", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS")) {
         $settingValue = Get-ConfigurationValue $configuration $settingName
         if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
         $parsed = 0
@@ -268,66 +294,41 @@ switch ($Action) {
     }
     "pull" {
         Assert-FreeSpace
-        & docker pull "infiniflow/ragflow:v0.26.4"
-        if ($LASTEXITCODE -ne 0) { throw "Official RAGFlow image pull failed" }
+        Invoke-Docker @("pull", "infiniflow/ragflow:v0.26.4")
         Invoke-Compose @("pull", "infinity", "mysql", "minio", "redis")
     }
     "ui-build" {
         Assert-FreeSpace
-        & docker build --file $uiDockerfile --tag "lig/ragflow-ui:v0.26.4-1" $workspaceDirectory
-        if ($LASTEXITCODE -ne 0) {
-            throw "LIG UI Docker build failed with exit code $LASTEXITCODE"
-        }
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-1", $workspaceDirectory)
         Write-Host "Built lig/ragflow-ui:v0.26.4-1"
     }
     "mcp-build" {
         Assert-FreeSpace
-        & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
-        if ($LASTEXITCODE -ne 0) {
-            throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE"
-        }
+        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-1", $mcpDirectory)
         Write-Host "Built lig/ragflow-mcp:v0.26.4-1"
     }
     "ocr-build" {
         Assert-FreeSpace
-        & docker build --file $ocrDockerfile --tag "lig/paddleocr-ko:v0.26.4-1" $ocrDirectory
-        if ($LASTEXITCODE -ne 0) {
-            throw "LIG Korean PaddleOCR Docker build failed with exit code $LASTEXITCODE"
-        }
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-1", $ocrDirectory)
         Write-Host "Built lig/paddleocr-ko:v0.26.4-1"
     }
     "gpu-build" {
         Assert-FreeSpace
-        & docker build --file $gpuUiDockerfile --tag "lig/ragflow-ui-gpu:v0.26.4-1" $workspaceDirectory
-        if ($LASTEXITCODE -ne 0) {
-            throw "LIG GPU UI runtime build failed with exit code $LASTEXITCODE"
-        }
-        & docker build --file $ocrDockerfile --build-arg "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-1" --tag "lig/paddleocr-ko-gpu:v0.26.4-1" $ocrDirectory
-        if ($LASTEXITCODE -ne 0) {
-            throw "LIG GPU Korean PaddleOCR build failed with exit code $LASTEXITCODE"
-        }
+        Invoke-Docker @("build", "--file", $gpuUiDockerfile, "--tag", "lig/ragflow-ui-gpu:v0.26.4-1", $workspaceDirectory)
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-1", "--tag", "lig/paddleocr-ko-gpu:v0.26.4-1", $ocrDirectory)
         Write-Host "Built LIG CUDA 12.8 RAGFlow and Korean PaddleOCR images."
     }
     "embedding-build" {
         Assert-FreeSpace
-        & docker build --file $embeddingModelDockerfile --tag "lig/qwen3-embedding-tei:0.6b-1" $embeddingDirectory
-        if ($LASTEXITCODE -ne 0) {
-            throw "Qwen3 TEI model image build failed with exit code $LASTEXITCODE"
-        }
-        & docker build --file $embeddingAdapterDockerfile --tag "lig/qwen3-embedding-adapter:0.6b-1" $embeddingDirectory
-        if ($LASTEXITCODE -ne 0) {
-            throw "Qwen3 embedding adapter image build failed with exit code $LASTEXITCODE"
-        }
+        Invoke-Docker @("build", "--file", $embeddingModelDockerfile, "--tag", "lig/qwen3-embedding-tei:0.6b-1", $embeddingDirectory)
+        Invoke-Docker @("build", "--file", $embeddingAdapterDockerfile, "--tag", "lig/qwen3-embedding-adapter:0.6b-1", $embeddingDirectory)
         Write-Host "Built Qwen3 Embedding 0.6B TEI CPU and query adapter images."
     }
     "build" {
         Assert-FreeSpace
-        & docker build --file $uiDockerfile --tag "lig/ragflow-ui:v0.26.4-1" $workspaceDirectory
-        if ($LASTEXITCODE -ne 0) { throw "LIG UI Docker build failed with exit code $LASTEXITCODE" }
-        & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
-        if ($LASTEXITCODE -ne 0) { throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE" }
-        & docker build --file $ocrDockerfile --tag "lig/paddleocr-ko:v0.26.4-1" $ocrDirectory
-        if ($LASTEXITCODE -ne 0) { throw "LIG Korean PaddleOCR Docker build failed with exit code $LASTEXITCODE" }
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-1", $workspaceDirectory)
+        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-1", $mcpDirectory)
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-1", $ocrDirectory)
         Write-Host "Built LIG UI, management MCP, and Korean PaddleOCR images."
     }
     "start" {
@@ -354,18 +355,16 @@ switch ($Action) {
             if (-not (Test-Path -LiteralPath $mcpDockerfile -PathType Leaf)) {
                 throw "Management MCP image is missing and its Dockerfile is unavailable: $mcpDockerfile"
             }
-            & docker build --file $mcpDockerfile --tag "lig/ragflow-mcp:v0.26.4-1" $mcpDirectory
-            if ($LASTEXITCODE -ne 0) { throw "LIG management MCP Docker build failed with exit code $LASTEXITCODE" }
+            Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-1", $mcpDirectory)
         }
         & docker image inspect "lig/paddleocr-ko:v0.26.4-1" *> $null
         if ($LASTEXITCODE -ne 0) {
             if (-not (Test-Path -LiteralPath $ocrDockerfile -PathType Leaf)) {
                 throw "Korean PaddleOCR image is missing and its Dockerfile is unavailable: $ocrDockerfile"
             }
-            & docker build --file $ocrDockerfile --tag "lig/paddleocr-ko:v0.26.4-1" $ocrDirectory
-            if ($LASTEXITCODE -ne 0) { throw "LIG Korean PaddleOCR Docker build failed with exit code $LASTEXITCODE" }
+            Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-1", $ocrDirectory)
         }
-        Invoke-Compose @("up", "-d", "--remove-orphans")
+        Invoke-Compose @("up", "-d", "--remove-orphans", "--wait", "--wait-timeout", "300")
         Invoke-Compose @("ps")
     }
     "embedding-start" {

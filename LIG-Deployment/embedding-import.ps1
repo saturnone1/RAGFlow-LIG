@@ -4,6 +4,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Invoke-Docker([string[]]$Arguments) {
+    $previous = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($exitCode -ne 0) { throw "docker failed with exit code $exitCode" }
+}
 $sourcePath = [IO.Path]::GetFullPath($Source)
 $manifestPath = Join-Path $sourcePath "manifest.json"
 $archivePath = Join-Path $sourcePath "lig-qwen3-embedding-images-0.6b.tar.gz"
@@ -13,7 +24,9 @@ foreach ($path in @($manifestPath, $archivePath)) {
 }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 7) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
+if ($manifest.bundleFormat -ne 8) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
+if (-not $manifest.embeddingIncluded) { throw "This bundle does not include the optional embedding archive." }
+if ($manifest.embeddingModel -ne "Qwen/Qwen3-Embedding-0.6B") { throw "Unsupported embedding model: $($manifest.embeddingModel)" }
 
 $expectedImages = @(
     "lig/qwen3-embedding-tei:0.6b-1",
@@ -29,8 +42,7 @@ if ((Get-Item -LiteralPath $archivePath).Length -ne [long]$archiveRecord.bytes) 
 $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHash -ne ([string]$archiveRecord.sha256).ToLowerInvariant()) { throw "Embedding archive SHA-256 mismatch." }
 
-docker load --input $archivePath
-if ($LASTEXITCODE -ne 0) { throw "Embedding image docker load failed." }
+Invoke-Docker @("load", "--input", $archivePath)
 
 foreach ($image in $expectedImages) {
     $expectedIdProperty = $manifest.embeddingImageIds.PSObject.Properties[$image]

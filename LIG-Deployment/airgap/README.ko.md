@@ -75,15 +75,15 @@ RAGFlow 컨테이너 안에서 접근 가능한 주소여야 하며, 모델명�
 ## 구성 내용
 
 - `lig/ragflow-ui:v0.26.4-1` 커스텀 UI 이미지
-- `lig/ragflow-ui-gpu:v0.26.4-1` CUDA 12.8·cuDNN 9 커스텀 UI 이미지
+- `lig/ragflow-ui-gpu:v0.26.4-1` CUDA 12.8·cuDNN 9 커스텀 UI 이미지(`-IncludeGpu` 번들만)
 - `lig/ragflow-mcp:v0.26.4-1` LIG 관리 MCP 이미지
 - `lig/paddleocr-ko:v0.26.4-1` 한국어 PP-OCRv5 CPU 이미지
-- `lig/paddleocr-ko-gpu:v0.26.4-1` 한국어 PP-OCRv5 CUDA 이미지
-- `lig/qwen3-embedding-tei:0.6b-1` Qwen3 0.6B 모델 내장 TEI CPU 이미지
-- `lig/qwen3-embedding-adapter:0.6b-1` RAGFlow 질의 instruction 어댑터
+- `lig/paddleocr-ko-gpu:v0.26.4-1` 한국어 PP-OCRv5 CUDA 이미지(`-IncludeGpu` 번들만)
+- `lig/qwen3-embedding-tei:0.6b-1` Qwen3 0.6B 모델 내장 TEI CPU 이미지(`-IncludeEmbedding` 번들만)
+- `lig/qwen3-embedding-adapter:0.6b-1` RAGFlow 질의 instruction 어댑터(`-IncludeEmbedding` 번들만)
 - `infiniflow/ragflow:v0.26.4` 롤백 이미지
 - Infinity, MySQL, MinIO, Valkey 이미지
 - 고정 버전 Compose 런타임 파일
 - 기본 런타임과 선택형 임베딩을 분리한 gzip Docker 이미지 아카이브 및 SHA-256 manifest
 
-Qwen3 임베딩 이미지와 모델은 번들 폴더에 포함되지만 기본 설치에서는 로드하거나 실행하지 않습니다. 사내 embedding endpoint가 없을 때 `install-embedding-cpu.ps1`로 선택 설치합니다. 생성 LLM은 별도로 준비해야 합니다.
+Qwen3 임베딩 이미지와 모델은 내보낼 때 `-IncludeEmbedding`으로 만든 번들에만 포함되며 기본 설치에서는 로드하거나 실행하지 않습니다. 아카이브가 포함되어 있고 사내 embedding endpoint가 없을 때 `install-embedding-cpu.ps1`로 선택 설치합니다. 생성 LLM은 별도로 준비해야 합니다.

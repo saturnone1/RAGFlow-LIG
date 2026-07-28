@@ -42,7 +42,11 @@ app.Use(async (context, next) =>
     }
     await next();
 });
-app.MapGet("/healthz", async (RagFlowClient client) => Results.Ok(await client.HealthAsync()));
+app.MapGet("/healthz", async (RagFlowClient client) =>
+{
+    var health = await client.HealthAsync();
+    return health.Available ? Results.Ok(health) : Results.Json(health, statusCode: StatusCodes.Status503ServiceUnavailable);
+});
 app.MapMcp("/mcp");
 app.MapMcp("");
 await app.RunAsync();

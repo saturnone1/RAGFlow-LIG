@@ -16,7 +16,7 @@ services:
       LIG_DOCUMENT_PASSWORD_KEY_ID: ${LIG_DOCUMENT_PASSWORD_KEY_ID:-primary}
       LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS: ${LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS:-}
       PADDLEOCR_BASE_URL: http://paddleocr:8080
-      PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
     volumes:
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
@@ -38,6 +38,12 @@ services:
     depends_on:
       paddleocr-cpu:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/ragflow/.venv/bin/python", "-m", "lig_runtime.service_health"]
+      interval: 15s
+      timeout: 12s
+      start_period: 60s
+      retries: 10
 
   ragflow-gpu:
     image: ${RAGFLOW_GPU_IMAGE:?Set RAGFLOW_GPU_IMAGE in LIG-Deployment/.env.lig}
@@ -50,7 +56,7 @@ services:
       LIG_DOCUMENT_PASSWORD_KEY_ID: ${LIG_DOCUMENT_PASSWORD_KEY_ID:-primary}
       LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS: ${LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS:-}
       PADDLEOCR_BASE_URL: http://paddleocr:8080
-      PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
     volumes:
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
@@ -75,6 +81,12 @@ services:
     depends_on:
       paddleocr-gpu:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/ragflow/.venv/bin/python", "-m", "lig_runtime.service_health"]
+      interval: 15s
+      timeout: 12s
+      start_period: 60s
+      retries: 10
 
   paddleocr-cpu:
     profiles:
@@ -88,9 +100,14 @@ services:
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
       PADDLEOCR_DEVICE: cpu
-      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_INTERNAL_BASE_URL: http://paddleocr:8080
       PADDLEOCR_JOB_WORKERS: ${PADDLEOCR_JOB_WORKERS:-1}
+      PADDLEOCR_MAX_UPLOAD_BYTES: ${PADDLEOCR_MAX_UPLOAD_BYTES:-268435456}
+      PADDLEOCR_MAX_PDF_PAGES: ${PADDLEOCR_MAX_PDF_PAGES:-2000}
+      PADDLEOCR_MAX_PENDING_JOBS: ${PADDLEOCR_MAX_PENDING_JOBS:-8}
+      PADDLEOCR_MIN_FREE_BYTES: ${PADDLEOCR_MIN_FREE_BYTES:-536870912}
+      PADDLEOCR_MAX_PAGE_PIXELS: ${PADDLEOCR_MAX_PAGE_PIXELS:-50000000}
     ports:
       - ${PADDLEOCR_PORT:?Set PADDLEOCR_PORT in LIG-Deployment/.env.lig}:8080
     networks:
@@ -112,9 +129,14 @@ services:
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
       PADDLEOCR_DEVICE: gpu
-      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
+      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_INTERNAL_BASE_URL: http://paddleocr:8080
       PADDLEOCR_JOB_WORKERS: ${PADDLEOCR_JOB_WORKERS:-1}
+      PADDLEOCR_MAX_UPLOAD_BYTES: ${PADDLEOCR_MAX_UPLOAD_BYTES:-268435456}
+      PADDLEOCR_MAX_PDF_PAGES: ${PADDLEOCR_MAX_PDF_PAGES:-2000}
+      PADDLEOCR_MAX_PENDING_JOBS: ${PADDLEOCR_MAX_PENDING_JOBS:-8}
+      PADDLEOCR_MIN_FREE_BYTES: ${PADDLEOCR_MIN_FREE_BYTES:-536870912}
+      PADDLEOCR_MAX_PAGE_PIXELS: ${PADDLEOCR_MAX_PAGE_PIXELS:-50000000}
     ports:
       - ${PADDLEOCR_PORT:?Set PADDLEOCR_PORT in LIG-Deployment/.env.lig}:8080
     networks:

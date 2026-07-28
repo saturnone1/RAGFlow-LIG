@@ -1,10 +1,23 @@
 param(
     [Parameter(Mandatory)]
     [string]$Destination,
-    [string]$ExistingImageArchive
+    [string]$ExistingImageArchive,
+    [switch]$IncludeGpu,
+    [switch]$IncludeEmbedding
 )
 
 $ErrorActionPreference = "Stop"
+
+function Invoke-Docker([string[]]$Arguments) {
+    $previous = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        & docker @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($exitCode -ne 0) { throw "docker failed with exit code $exitCode" }
+}
 $destinationPath = [IO.Path]::GetFullPath($Destination)
 $deploymentDirectory = $PSScriptRoot
 $workspaceDirectory = Split-Path $deploymentDirectory -Parent
@@ -36,9 +49,11 @@ $bundleFiles = @(
     @{ Source = (Join-Path $bundleTemplateDirectory "logs.ps1"); Target = "logs.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "README.ko.md"); Target = "README.ko.md" },
     @{ Source = (Join-Path $bundleTemplateDirectory "INSTALL-AND-CONFIGURATION.ko.md"); Target = "INSTALL-AND-CONFIGURATION.ko.md" },
+    @{ Source = (Join-Path $deploymentDirectory "DOCUMENT-COMPATIBILITY.ko.md"); Target = "DOCUMENT-COMPATIBILITY.ko.md" },
     @{ Source = (Join-Path $deploymentDirectory "airgap-import.ps1"); Target = "LIG-Deployment\airgap-import.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "embedding-import.ps1"); Target = "LIG-Deployment\embedding-import.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "lig-ragflow.ps1"); Target = "LIG-Deployment\lig-ragflow.ps1" },
+    @{ Source = (Join-Path $deploymentDirectory "rotate-document-password-key.ps1"); Target = "LIG-Deployment\rotate-document-password-key.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "docker-compose.lig.yml"); Target = "LIG-Deployment\docker-compose.lig.yml" },
     @{ Source = (Join-Path $deploymentDirectory ".env.lig"); Target = "LIG-Deployment\.env.lig" },
     @{ Source = (Join-Path $deploymentDirectory ".env.secret.example"); Target = "LIG-Deployment\.env.secret.example" },
@@ -64,16 +79,17 @@ foreach ($bundleFile in $bundleFiles) {
 
 $images = @(
     "lig/ragflow-ui:v0.26.4-1",
-    "lig/ragflow-ui-gpu:v0.26.4-1",
     "lig/ragflow-mcp:v0.26.4-1",
     "lig/paddleocr-ko:v0.26.4-1",
-    "lig/paddleocr-ko-gpu:v0.26.4-1",
     "infiniflow/ragflow:v0.26.4",
     "infiniflow/infinity:v0.7.0",
     "mysql:8.0.39",
     "pgsty/minio:RELEASE.2026-03-25T00-00-00Z",
     "valkey/valkey:8"
 )
+if ($IncludeGpu) {
+    $images += @("lig/ragflow-ui-gpu:v0.26.4-1", "lig/paddleocr-ko-gpu:v0.26.4-1")
+}
 foreach ($image in $images) {
     docker image inspect $image *> $null
     if ($LASTEXITCODE -ne 0) { throw "Required image is missing: $image" }
@@ -125,8 +141,7 @@ if ($ExistingImageArchive) {
     Copy-Item -LiteralPath $existingArchivePath -Destination $imageArchive
 }
 else {
-    docker save --output $uncompressedArchive @images
-    if ($LASTEXITCODE -ne 0) { throw "docker save failed" }
+    Invoke-Docker (@("save", "--output", $uncompressedArchive) + $images)
 
     Write-Host "Compressing Docker image archive with gzip..."
     $inputStream = $null
@@ -158,35 +173,37 @@ else {
     }
 }
 
-$embeddingImages = @(
+$embeddingImages = @()
+$embeddingImageIds = [ordered]@{}
+if ($IncludeEmbedding) {
+    $embeddingImages = @(
     "lig/qwen3-embedding-tei:0.6b-1",
     "lig/qwen3-embedding-adapter:0.6b-1"
-)
-$embeddingImageIds = [ordered]@{}
-foreach ($image in $embeddingImages) {
-    docker image inspect $image *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Required optional embedding image is missing: $image" }
-    $embeddingImageIds[$image] = (& docker image inspect --format '{{.Id}}' $image).Trim()
-}
-$embeddingTar = Join-Path $destinationPath "lig-qwen3-embedding-images-0.6b.tar"
-$embeddingArchive = Join-Path $destinationPath "lig-qwen3-embedding-images-0.6b.tar.gz"
-docker save --output $embeddingTar @embeddingImages
-if ($LASTEXITCODE -ne 0) { throw "Embedding docker save failed" }
-Write-Host "Compressing optional Qwen3 embedding image archive with gzip..."
-$embeddingInput = $null
-$embeddingOutput = $null
-$embeddingGzip = $null
-try {
-    $embeddingInput = [IO.File]::OpenRead($embeddingTar)
-    $embeddingOutput = [IO.File]::Create($embeddingArchive)
-    $embeddingGzip = [IO.Compression.GZipStream]::new($embeddingOutput, [IO.Compression.CompressionLevel]::Optimal, $false)
-    $embeddingInput.CopyTo($embeddingGzip, 1MB)
-}
-finally {
-    if ($null -ne $embeddingGzip) { $embeddingGzip.Dispose() }
-    if ($null -ne $embeddingOutput) { $embeddingOutput.Dispose() }
-    if ($null -ne $embeddingInput) { $embeddingInput.Dispose() }
-    if (Test-Path -LiteralPath $embeddingTar) { Remove-Item -LiteralPath $embeddingTar -Force }
+    )
+    foreach ($image in $embeddingImages) {
+        docker image inspect $image *> $null
+        if ($LASTEXITCODE -ne 0) { throw "Requested optional embedding image is missing: $image" }
+        $embeddingImageIds[$image] = (& docker image inspect --format '{{.Id}}' $image).Trim()
+    }
+    $embeddingTar = Join-Path $destinationPath "lig-qwen3-embedding-images-0.6b.tar"
+    $embeddingArchive = Join-Path $destinationPath "lig-qwen3-embedding-images-0.6b.tar.gz"
+    Invoke-Docker (@("save", "--output", $embeddingTar) + $embeddingImages)
+    Write-Host "Compressing optional Qwen3 embedding image archive with gzip..."
+    $embeddingInput = $null
+    $embeddingOutput = $null
+    $embeddingGzip = $null
+    try {
+        $embeddingInput = [IO.File]::OpenRead($embeddingTar)
+        $embeddingOutput = [IO.File]::Create($embeddingArchive)
+        $embeddingGzip = [IO.Compression.GZipStream]::new($embeddingOutput, [IO.Compression.CompressionLevel]::Optimal, $false)
+        $embeddingInput.CopyTo($embeddingGzip, 1MB)
+    }
+    finally {
+        if ($null -ne $embeddingGzip) { $embeddingGzip.Dispose() }
+        if ($null -ne $embeddingOutput) { $embeddingOutput.Dispose() }
+        if ($null -ne $embeddingInput) { $embeddingInput.Dispose() }
+        if (Test-Path -LiteralPath $embeddingTar) { Remove-Item -LiteralPath $embeddingTar -Force }
+    }
 }
 
 $destinationPrefix = $destinationPath.TrimEnd('\') + '\'
@@ -198,20 +215,22 @@ $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Ob
     [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = $hash.Hash.ToLowerInvariant() }
 }
 $manifest = [pscustomobject]@{
-    bundleFormat = 7
+    bundleFormat = 8
     ragflowVersion = "v0.26.4"
     uiImage = "lig/ragflow-ui:v0.26.4-1"
-    gpuUiImage = "lig/ragflow-ui-gpu:v0.26.4-1"
+    gpuIncluded = [bool]$IncludeGpu
+    gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-1" } else { $null }
     mcpImage = "lig/ragflow-mcp:v0.26.4-1"
     ocrImage = "lig/paddleocr-ko:v0.26.4-1"
-    gpuOcrImage = "lig/paddleocr-ko-gpu:v0.26.4-1"
+    gpuOcrImage = if ($IncludeGpu) { "lig/paddleocr-ko-gpu:v0.26.4-1" } else { $null }
     images = @($images)
     imageIds = $imageIds
     embeddingImages = @($embeddingImages)
     embeddingImageIds = $embeddingImageIds
-    embeddingModel = "Qwen/Qwen3-Embedding-0.6B"
-    embeddingModelRevision = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
-    embeddingRuntime = "TEI cpu-1.9"
+    embeddingIncluded = [bool]$IncludeEmbedding
+    embeddingModel = if ($IncludeEmbedding) { "Qwen/Qwen3-Embedding-0.6B" } else { $null }
+    embeddingModelRevision = if ($IncludeEmbedding) { "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3" } else { $null }
+    embeddingRuntime = if ($IncludeEmbedding) { "TEI cpu-1.9" } else { $null }
     createdAt = (Get-Date).ToString("o")
     files = @($records)
 }

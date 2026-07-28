@@ -14,20 +14,53 @@ public sealed class RagFlowClient
         _settings = settings;
     }
 
-    public async Task<object> HealthAsync()
+    public async Task<RagFlowHealth> HealthAsync()
     {
-        using var response = await _http.GetAsync("api/v1/system/version");
-        return new
+        try
         {
-            status = response.IsSuccessStatusCode ? "ok" : "unavailable",
-            ragflowBaseUrl = _settings.BaseUrl,
-            apiKeyConfigured = !string.IsNullOrWhiteSpace(_settings.ApiKey),
-            writesEnabled = _settings.WritesEnabled,
-            fileWritesEnabled = _settings.FileWritesEnabled,
-            mcpAuthenticationEnabled = !string.IsNullOrWhiteSpace(_settings.McpApiKey),
-            maxTextResponseBytes = _settings.MaxTextResponseBytes,
-            httpStatus = (int)response.StatusCode
-        };
+            using var request = CreateRequest(HttpMethod.Get, "api/v1/system/status");
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            var bytes = await ReadLimitedBytesAsync(response.Content, _settings.MaxTextResponseBytes);
+            var available = response.IsSuccessStatusCode;
+            if (available)
+            {
+                using var document = JsonDocument.Parse(bytes.Length == 0 ? "{}"u8.ToArray() : bytes);
+                available = IsReady(document.RootElement);
+            }
+            return BuildHealth(available, (int)response.StatusCode, available ? null : "RAGFlow readiness check failed.");
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
+        {
+            return BuildHealth(false, null, "RAGFlow is unreachable or returned an invalid readiness response.");
+        }
+    }
+
+    private RagFlowHealth BuildHealth(bool available, int? httpStatus, string? error) => new(
+        available ? "ok" : "unavailable",
+        available,
+        _settings.BaseUrl,
+        !string.IsNullOrWhiteSpace(_settings.ApiKey),
+        _settings.WritesEnabled,
+        _settings.FileWritesEnabled,
+        !string.IsNullOrWhiteSpace(_settings.McpApiKey),
+        _settings.MaxTextResponseBytes,
+        httpStatus,
+        error);
+
+    private static bool IsReady(JsonElement root)
+    {
+        if (!root.TryGetProperty("code", out var code)) return false;
+        var codeIsZero = code.ValueKind == JsonValueKind.Number
+            ? code.TryGetInt32(out var numericCode) && numericCode == 0
+            : code.ValueKind == JsonValueKind.String && int.TryParse(code.GetString(), out numericCode) && numericCode == 0;
+        if (!codeIsZero || !root.TryGetProperty("data", out var data)) return false;
+        foreach (var dependency in new[] { "database", "doc_engine", "redis", "storage" })
+        {
+            if (!data.TryGetProperty(dependency, out var state)
+                || !state.TryGetProperty("status", out var status)
+                || status.GetString() != "green") return false;
+        }
+        return true;
     }
 
     public Task<JsonElement> GetAsync(string path) => SendAsync(HttpMethod.Get, path);
@@ -258,3 +291,15 @@ public sealed class RagFlowClient
         return destination.ToArray();
     }
 }
+
+public sealed record RagFlowHealth(
+    string Status,
+    bool Available,
+    string RagflowBaseUrl,
+    bool ApiKeyConfigured,
+    bool WritesEnabled,
+    bool FileWritesEnabled,
+    bool McpAuthenticationEnabled,
+    long MaxTextResponseBytes,
+    int? HttpStatus,
+    string? Error);

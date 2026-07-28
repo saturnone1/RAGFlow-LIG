@@ -1,4 +1,5 @@
 import {
+  documentPasswordSchema,
   documentPasswordsSchema,
   getUploadFile,
   getUploadFilePasswordKey,
@@ -11,6 +12,13 @@ describe('document upload password identity', () => {
     expect(
       documentPasswordsSchema.parse({ untouched: undefined, blank: '' }),
     ).toEqual({ untouched: '', blank: '' });
+  });
+
+  it('enforces the backend UTF-8 byte limit instead of a character limit', () => {
+    expect(documentPasswordSchema.safeParse('한'.repeat(341)).success).toBe(true);
+    expect(documentPasswordSchema.safeParse('한'.repeat(342)).success).toBe(false);
+    expect(documentPasswordSchema.safeParse('a'.repeat(1024)).success).toBe(true);
+    expect(documentPasswordSchema.safeParse('a'.repeat(1025)).success).toBe(false);
   });
 
   it.each(['pdf', 'DOCX', 'xlsx', 'Pptx', 'hwp', 'HWPX'])(

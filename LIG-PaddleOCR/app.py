@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -49,22 +51,47 @@ if RENDER_SCALE <= 0:
 
 JOB_TTL_SECONDS = int(os.getenv("PADDLEOCR_JOB_TTL_SECONDS", "3600"))
 JOB_WORKERS = int(os.getenv("PADDLEOCR_JOB_WORKERS", "1"))
+MAX_UPLOAD_BYTES = int(os.getenv("PADDLEOCR_MAX_UPLOAD_BYTES", str(256 * 1024 * 1024)))
+MAX_PDF_PAGES = int(os.getenv("PADDLEOCR_MAX_PDF_PAGES", "2000"))
+MAX_PENDING_JOBS = int(os.getenv("PADDLEOCR_MAX_PENDING_JOBS", "8"))
+MIN_FREE_BYTES = int(os.getenv("PADDLEOCR_MIN_FREE_BYTES", str(512 * 1024 * 1024)))
+MAX_PAGE_PIXELS = int(os.getenv("PADDLEOCR_MAX_PAGE_PIXELS", "50000000"))
 PROVISION_INTERVAL_SECONDS = int(os.getenv("PADDLEOCR_PROVISION_INTERVAL_SECONDS", "30"))
-if JOB_WORKERS < 1:
-    raise RuntimeError("PADDLEOCR_JOB_WORKERS must be positive")
-if PROVISION_INTERVAL_SECONDS < 1:
-    raise RuntimeError("PADDLEOCR_PROVISION_INTERVAL_SECONDS must be positive")
+for setting_name, setting_value in (
+    ("PADDLEOCR_JOB_TTL_SECONDS", JOB_TTL_SECONDS),
+    ("PADDLEOCR_JOB_WORKERS", JOB_WORKERS),
+    ("PADDLEOCR_MAX_UPLOAD_BYTES", MAX_UPLOAD_BYTES),
+    ("PADDLEOCR_MAX_PDF_PAGES", MAX_PDF_PAGES),
+    ("PADDLEOCR_MAX_PENDING_JOBS", MAX_PENDING_JOBS),
+    ("PADDLEOCR_MIN_FREE_BYTES", MIN_FREE_BYTES),
+    ("PADDLEOCR_MAX_PAGE_PIXELS", MAX_PAGE_PIXELS),
+    ("PADDLEOCR_PROVISION_INTERVAL_SECONDS", PROVISION_INTERVAL_SECONDS),
+):
+    if setting_value < 1:
+        raise RuntimeError(f"{setting_name} must be positive")
 
 INTERNAL_TOKEN = os.getenv("PADDLEOCR_INTERNAL_TOKEN", "")
+if not INTERNAL_TOKEN:
+    raise RuntimeError("PADDLEOCR_INTERNAL_TOKEN is required")
 INTERNAL_BASE_URL = os.getenv("PADDLEOCR_INTERNAL_BASE_URL", "http://paddleocr:8080").rstrip("/")
 JOB_DIRECTORY = Path(os.getenv("PADDLEOCR_JOB_DIRECTORY", "/tmp/lig-paddleocr-jobs"))
 JOB_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
 app = Quart(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES + 1024 * 1024
 executor = ThreadPoolExecutor(max_workers=JOB_WORKERS, thread_name_prefix="paddleocr-ko")
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.Lock()
 provisioner_stop = threading.Event()
+
+
+class OcrResourceLimitError(ValueError):
+    pass
+
+
+@app.errorhandler(413)
+async def request_too_large(_error):
+    return jsonify(error=f"request exceeds the {MAX_UPLOAD_BYTES} byte OCR upload limit"), 413
 
 
 def _render_ragflow_service_config() -> None:
@@ -110,15 +137,17 @@ def _provision_ragflow_tenants() -> None:
 
 
 def _authorized() -> bool:
-    if not INTERNAL_TOKEN:
-        return True
-    return request.headers.get("Authorization", "") == f"Bearer {INTERNAL_TOKEN}"
+    return hmac.compare_digest(request.headers.get("Authorization", ""), f"Bearer {INTERNAL_TOKEN}")
 
 
 def _cleanup_jobs() -> None:
     cutoff = time.time() - JOB_TTL_SECONDS
     with jobs_lock:
-        expired = [job_id for job_id, job in jobs.items() if job["updated_at"] < cutoff]
+        expired = [
+            job_id
+            for job_id, job in jobs.items()
+            if job["state"] in {"done", "failed"} and job["updated_at"] < cutoff
+        ]
         expired_jobs = [jobs.pop(job_id) for job_id in expired]
     for job in expired_jobs:
         _remove_job_files(job)
@@ -145,6 +174,11 @@ def _rectangular_box(points: Any) -> list[int]:
     ]
 
 
+def _validate_page_pixels(width: float, height: float) -> None:
+    if width <= 0 or height <= 0 or width * height > MAX_PAGE_PIXELS:
+        raise OcrResourceLimitError(f"page exceeds the {MAX_PAGE_PIXELS} pixel OCR limit")
+
+
 def _ocr_image(image: Image.Image) -> dict[str, Any]:
     result = OCR(np.asarray(image.convert("RGB")), use_cls=False)
     texts = list(result.txts) if result.txts is not None else []
@@ -165,7 +199,7 @@ def _write_page_result(output, page: dict[str, Any]) -> None:
     output.flush()
 
 
-def _process_document(source_path: Path, result_path: Path) -> int:
+def _process_document(source_path: Path, result_path: Path, progress=None) -> int:
     page_count = 0
     with source_path.open("rb") as source:
         is_pdf = source.read(4) == b"%PDF"
@@ -175,46 +209,70 @@ def _process_document(source_path: Path, result_path: Path) -> int:
             document = pdfium.PdfDocument(str(source_path))
             try:
                 for page in document:
+                    width, height = page.get_size()
+                    _validate_page_pixels(width * RENDER_SCALE, height * RENDER_SCALE)
                     image = page.render(scale=RENDER_SCALE).to_pil()
                     try:
                         _write_page_result(output, _ocr_image(image))
                         page_count += 1
+                        if progress:
+                            progress(page_count)
                     finally:
                         image.close()
             finally:
                 document.close()
         else:
             with Image.open(source_path) as image:
+                _validate_page_pixels(*image.size)
                 _write_page_result(output, _ocr_image(image))
                 page_count = 1
+                if progress:
+                    progress(page_count)
     return page_count
 
 
 def _run_job(job_id: str, source_path: Path, result_path: Path) -> None:
     with jobs_lock:
-        jobs[job_id].update(state="running", updated_at=time.time())
-    try:
-        page_count = _process_document(source_path, result_path)
+        job = jobs.get(job_id)
+        if job is None:
+            source_path.unlink(missing_ok=True)
+            return
+        job.update(state="running", updated_at=time.time())
+
+    def update_progress(page_count: int) -> None:
         with jobs_lock:
-            jobs[job_id].update(
-                state="done",
-                page_count=page_count,
-                updated_at=time.time(),
-            )
+            job = jobs.get(job_id)
+            if job is not None:
+                job.update(processed_pages=page_count, updated_at=time.time())
+
+    try:
+        page_count = _process_document(source_path, result_path, update_progress)
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is not None:
+                job.update(
+                    state="done",
+                    page_count=page_count,
+                    processed_pages=page_count,
+                    updated_at=time.time(),
+                )
     except Exception as exc:
         app.logger.exception("Korean OCR job %s failed", job_id)
         result_path.unlink(missing_ok=True)
         with jobs_lock:
-            jobs[job_id].update(state="failed", error=str(exc), updated_at=time.time())
+            job = jobs.get(job_id)
+            if job is not None:
+                job.update(state="failed", error=str(exc), updated_at=time.time())
     finally:
         source_path.unlink(missing_ok=True)
 
 
 def _cleanup_job_files_at_startup() -> None:
-    cutoff = time.time() - JOB_TTL_SECONDS
     for path in JOB_DIRECTORY.iterdir():
         try:
-            if path.is_file() and path.stat().st_mtime < cutoff:
+            # The in-memory job registry is empty after a process restart, so
+            # every pre-existing file is orphaned and safe to remove.
+            if path.is_file():
                 path.unlink()
         except OSError:
             app.logger.exception("Failed to clean stale OCR job file %s", path)
@@ -222,11 +280,15 @@ def _cleanup_job_files_at_startup() -> None:
 
 @app.get("/health")
 async def health():
+    with jobs_lock:
+        active_jobs = sum(job["state"] in {"uploading", "queued", "running"} for job in jobs.values())
     return jsonify(
         status="ok",
         device=DEVICE,
         provider="CUDAExecutionProvider" if DEVICE == "gpu" else "CPUExecutionProvider",
         model="korean_PP-OCRv5_mobile_rec",
+        activeJobs=active_jobs,
+        maxPendingJobs=MAX_PENDING_JOBS,
     )
 
 
@@ -248,15 +310,13 @@ async def create_job():
     job_id = uuid.uuid4().hex
     source_path = JOB_DIRECTORY / f"{job_id}.source"
     result_path = JOB_DIRECTORY / f"{job_id}.jsonl"
-    await upload.save(source_path)
-    if source_path.stat().st_size == 0:
-        source_path.unlink(missing_ok=True)
-        return jsonify(error="file is empty"), 400
-
     now = time.time()
     with jobs_lock:
+        active_jobs = sum(job["state"] in {"uploading", "queued", "running"} for job in jobs.values())
+        if active_jobs >= MAX_PENDING_JOBS:
+            return jsonify(error="OCR queue is full; retry after an active job finishes"), 429
         jobs[job_id] = {
-            "state": "queued",
+            "state": "uploading",
             "created_at": now,
             "updated_at": now,
             "result_token": uuid.uuid4().hex,
@@ -264,9 +324,59 @@ async def create_job():
             "result_path": str(result_path),
         }
 
-    loop = asyncio.get_running_loop()
-    loop.run_in_executor(executor, _run_job, job_id, source_path, result_path)
-    return jsonify(data={"jobId": job_id})
+    scheduled = False
+    try:
+        expected_bytes = min(request.content_length or MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES)
+        if shutil.disk_usage(JOB_DIRECTORY).free < expected_bytes + MIN_FREE_BYTES:
+            return jsonify(error="insufficient temporary disk space for OCR"), 507
+        await upload.save(source_path)
+        source_size = source_path.stat().st_size
+        if source_size == 0:
+            return jsonify(error="file is empty"), 400
+        if source_size > MAX_UPLOAD_BYTES:
+            return jsonify(error=f"file exceeds the {MAX_UPLOAD_BYTES} byte OCR limit"), 413
+
+        with source_path.open("rb") as source:
+            is_pdf = source.read(4) == b"%PDF"
+        if is_pdf:
+            document = pdfium.PdfDocument(str(source_path))
+            try:
+                page_count = len(document)
+                if page_count > MAX_PDF_PAGES:
+                    return jsonify(error=f"PDF exceeds the {MAX_PDF_PAGES} page OCR limit"), 413
+                for page in document:
+                    width, height = page.get_size()
+                    _validate_page_pixels(width * RENDER_SCALE, height * RENDER_SCALE)
+            finally:
+                document.close()
+        else:
+            with Image.open(source_path) as image:
+                _validate_page_pixels(*image.size)
+
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is None:
+                return jsonify(error="OCR job reservation was lost"), 503
+            job.update(state="queued", source_size=source_size, updated_at=time.time())
+
+        loop = asyncio.get_running_loop()
+        scheduled = True
+        loop.run_in_executor(executor, _run_job, job_id, source_path, result_path)
+        return jsonify(data={"jobId": job_id})
+    except OcrResourceLimitError as exc:
+        return jsonify(error=str(exc)), 413
+    except Exception:
+        app.logger.exception("Failed to accept Korean OCR job %s", job_id)
+        return jsonify(error="the OCR upload could not be accepted"), 400
+    finally:
+        with jobs_lock:
+            reserved = jobs.get(job_id)
+            keep_job = scheduled and reserved is not None
+            if not keep_job:
+                jobs.pop(job_id, None)
+        if not keep_job:
+            source_path.unlink(missing_ok=True)
+            result_path.unlink(missing_ok=True)
 
 
 @app.get("/api/v2/ocr/jobs/<job_id>")
@@ -296,6 +406,7 @@ async def get_job(job_id: str):
 
 @app.get("/api/v2/ocr/results/<job_id>.jsonl")
 async def get_result(job_id: str):
+    _cleanup_jobs()
     with jobs_lock:
         job = dict(jobs.get(job_id, {}))
     if not job:
