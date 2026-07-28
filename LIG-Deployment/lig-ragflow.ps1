@@ -93,7 +93,7 @@ function Get-ConfigurationValue([hashtable]$Configuration, [string]$Name, [strin
     return $Default
 }
 
-function New-PdfPasswordKey {
+function New-DocumentPasswordKey {
     $bytes = New-Object byte[] 32
     $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
     try { $generator.GetBytes($bytes) }
@@ -101,26 +101,38 @@ function New-PdfPasswordKey {
     return [Convert]::ToBase64String($bytes)
 }
 
-function Ensure-PdfPasswordKey {
+function Ensure-DocumentPasswordKey {
     if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
         Copy-Item -LiteralPath (Join-Path $deploymentDirectory ".env.secret.example") -Destination $secretFile
     }
     $lines = @(Get-Content -LiteralPath $secretFile)
     $keyLineIndex = -1
+    $legacyKeyLineIndex = -1
     for ($index = 0; $index -lt $lines.Count; $index++) {
-        if ($lines[$index] -match '^\s*LIG_PDF_PASSWORD_KEY=') { $keyLineIndex = $index; break }
+        if ($lines[$index] -match '^\s*LIG_DOCUMENT_PASSWORD_KEY=') { $keyLineIndex = $index }
+        if ($lines[$index] -match '^\s*LIG_PDF_PASSWORD_KEY=') { $legacyKeyLineIndex = $index }
     }
     $currentValue = if ($keyLineIndex -ge 0) { ($lines[$keyLineIndex] -split '=', 2)[1].Trim() } else { "" }
-    if ([string]::IsNullOrWhiteSpace($currentValue) -or $currentValue -eq "generate-a-base64-encoded-32-byte-key") {
-        $keyLine = "LIG_PDF_PASSWORD_KEY=$(New-PdfPasswordKey)"
-        if ($keyLineIndex -ge 0) { $lines[$keyLineIndex] = $keyLine } else { $lines += $keyLine }
-        [IO.File]::WriteAllLines($secretFile, $lines, [Text.UTF8Encoding]::new($false))
-        Write-Host "Generated the local PDF password encryption key in LIG-Deployment\.env.secret."
+    if (([string]::IsNullOrWhiteSpace($currentValue) -or $currentValue -eq "generate-a-base64-encoded-32-byte-key") -and $legacyKeyLineIndex -ge 0) {
+        $legacyValue = ($lines[$legacyKeyLineIndex] -split '=', 2)[1].Trim()
+        if (-not [string]::IsNullOrWhiteSpace($legacyValue) -and $legacyValue -ne "generate-a-base64-encoded-32-byte-key") {
+            if ($keyLineIndex -ge 0) { $lines[$keyLineIndex] = "LIG_DOCUMENT_PASSWORD_KEY=$legacyValue" }
+            else { $lines[$legacyKeyLineIndex] = "LIG_DOCUMENT_PASSWORD_KEY=$legacyValue"; $keyLineIndex = $legacyKeyLineIndex; $legacyKeyLineIndex = -1 }
+            $currentValue = $legacyValue
+            Write-Host "Migrated the existing document password encryption key name."
+        }
     }
+    if ([string]::IsNullOrWhiteSpace($currentValue) -or $currentValue -eq "generate-a-base64-encoded-32-byte-key") {
+        $keyLine = "LIG_DOCUMENT_PASSWORD_KEY=$(New-DocumentPasswordKey)"
+        if ($keyLineIndex -ge 0) { $lines[$keyLineIndex] = $keyLine } else { $lines += $keyLine }
+        Write-Host "Generated the local document password encryption key in LIG-Deployment\.env.secret."
+    }
+    if ($legacyKeyLineIndex -ge 0) { $lines = @($lines | Where-Object { $_ -notmatch '^\s*LIG_PDF_PASSWORD_KEY=' }) }
+    [IO.File]::WriteAllLines($secretFile, $lines, [Text.UTF8Encoding]::new($false))
 }
 
 function Assert-LigConfiguration {
-    Ensure-PdfPasswordKey
+    Ensure-DocumentPasswordKey
     $configuration = Get-EnvFileValues $ligEnvFile
     $workerValue = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "1"
     $workers = 0

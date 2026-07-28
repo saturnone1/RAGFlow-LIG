@@ -17,6 +17,9 @@ EXPECTED_TASK_SERVICE_SHA256 = "32003df60fd2335a713894bbd91cdd885c0162b803a04d11
 EXPECTED_PIPELINE_PARSER_SHA256 = "8696d52e5fc38003062d2e70e71fcd84c12521cb18204a8565f325637bea6328"
 EXPECTED_PDF_CHUNK_METADATA_SHA256 = "3f204ed52fb787bee0b11f216b2cb9ef78953648aa3ffab008efa9147f039c8e"
 EXPECTED_CHUNK_API_SHA256 = "f5da126149457c6c256169914c3012bc587be9ac3f2c11beb5987b3063bc12db"
+EXPECTED_FILE_UTILS_SHA256 = "6d4d5fbe0e249b0e491b746b2b6351833a583f8acd21dda2c9099620ab5a294a"
+EXPECTED_REFACTORED_CHUNK_BUILDER_SHA256 = "0d76ff4d212dd1fa3c6be999177c12f9c6ac8579510c7d7807bdf458e6715b04"
+EXPECTED_REFACTORED_TASK_HANDLER_SHA256 = "a0b7b5e1e70c0d21bb35320e83ebc49650d099838958b92399b1c3b10bba6e7d"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
 NEW_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=60)"
 PADDLEOCR_PROGRESS_REPLACEMENTS = {
@@ -36,12 +39,13 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 11:
+    if len(sys.argv) != 14:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
             "<document_api_service.py> <file_service.py> <task_service.py> "
-            "<pipeline_parser.py> <pdf_chunk_metadata.py> <chunk_api.py>"
+            "<pipeline_parser.py> <pdf_chunk_metadata.py> <chunk_api.py> <file_utils.py> "
+            "<refactored_chunk_builder.py> <refactored_task_handler.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -96,16 +100,42 @@ def main() -> None:
     text = replace_once(
         text,
         "    # Record chunk configuration for comparison\n",
-        "    from lig_runtime.pdf_password import PdfPasswordError, prepare_pdf_for_parsing\n\n"
+        "    from lig_runtime.document_password import DocumentPasswordError, prepare_document_for_parsing\n\n"
         "    try:\n"
-        "        binary, parser_config_for_chunk = prepare_pdf_for_parsing(\n"
+        "        parser_filename, binary, parser_config_for_chunk = prepare_document_for_parsing(\n"
         "            task[\"name\"], binary, parser_config_for_chunk\n"
         "        )\n"
-        "    except PdfPasswordError as exc:\n"
+        "    except DocumentPasswordError as exc:\n"
         "        progress_callback(-1, str(exc))\n"
         "        raise\n\n"
         "    # Record chunk configuration for comparison\n",
-        "PDF decryption before chunking",
+        "document decryption before chunking",
+    )
+    text = replace_once(
+        text,
+        "                task[\"name\"],\n"
+        "                binary=binary,\n",
+        "                parser_filename,\n"
+        "                binary=binary,\n",
+        "prepared parser filename",
+    )
+    text = replace_once(
+        text,
+        '        logging.info(f"handle_task done for task {json.dumps(task)}")',
+        '        logging.info(f"handle_task done for task {task_id}, doc id:{task.get(\'doc_id\', \'\')}")',
+        "task completion log secret redaction",
+    )
+    text = replace_once(
+        text,
+        '        logging.exception(f"handle_task got exception for task {json.dumps(task)}")',
+        '        logging.exception(f"handle_task got exception for task {task_id}, doc id:{task.get(\'doc_id\', \'\')}")',
+        "task failure log secret redaction",
+    )
+    text = replace_once(
+        text,
+        '            logging.info(f"GraphRAG task result for task {task}:\\n{result}")',
+        '            logging.info(f"GraphRAG task result for task {task.get(\'id\', \'\')}:\\n{result}")',
+        "GraphRAG task log secret redaction",
     )
     task_executor_target.write_text(text, encoding="utf-8")
 
@@ -115,14 +145,14 @@ def main() -> None:
         text,
         "from pathlib import Path\n",
         "from pathlib import Path\n\n"
-        "from lig_runtime.pdf_password import PdfPasswordError, sanitize_document_response, secure_parser_config\n",
-        "document API PDF password import",
+        "from lig_runtime.document_password import DocumentPasswordError, sanitize_document_response, secure_parser_config\n",
+        "document API password import",
     )
     text = replace_once(
         text,
         "    parser_config_template_group_changed = False\n",
         "    parser_config_template_group_changed = False\n"
-        "    pdf_password_changed = False\n",
+        "    document_password_changed = False\n",
         "document password change tracking",
     )
     text = replace_once(
@@ -131,8 +161,8 @@ def main() -> None:
         "        parser_config_template_group_touched = _normalize_parser_config_compilation_template_group_ids(req[\"parser_config\"])\n",
         "        req[\"parser_config\"].update(update_doc_req.parser_config.ext)\n"
         "        try:\n"
-        "            req[\"parser_config\"], pdf_password_changed = secure_parser_config(req[\"parser_config\"], doc.name)\n"
-        "        except PdfPasswordError as exc:\n"
+        "            req[\"parser_config\"], document_password_changed = secure_parser_config(req[\"parser_config\"], doc.name)\n"
+        "        except DocumentPasswordError as exc:\n"
         "            return get_error_data_result(message=str(exc), code=RetCode.ARGUMENT_ERROR)\n"
         "        parser_config_template_group_touched = _normalize_parser_config_compilation_template_group_ids(req[\"parser_config\"])\n",
         "secure updated document password",
@@ -140,40 +170,40 @@ def main() -> None:
     text = replace_once(
         text,
         "        if parser_config_template_group_changed and doc.parser_id.lower() == req[\"chunk_method\"].lower():\n",
-        "        if (parser_config_template_group_changed or pdf_password_changed) and doc.parser_id.lower() == req[\"chunk_method\"].lower():\n",
+        "        if (parser_config_template_group_changed or document_password_changed) and doc.parser_id.lower() == req[\"chunk_method\"].lower():\n",
         "reset after password update with chunk method",
     )
     text = replace_once(
         text,
         "    elif parser_config_template_group_changed:\n",
-        "    elif parser_config_template_group_changed or pdf_password_changed:\n",
+        "    elif parser_config_template_group_changed or document_password_changed:\n",
         "reset after password update",
     )
     text = replace_once(
         text,
         "    err, files = await thread_pool_exec(\n"
         "        FileService.upload_document,\n",
-        "    pdf_passwords = None\n"
-        "    raw_pdf_passwords = form.get(\"pdf_passwords\")\n"
-        "    if raw_pdf_passwords:\n"
+        "    document_passwords = None\n"
+        "    raw_document_passwords = form.get(\"document_passwords\")\n"
+        "    if raw_document_passwords:\n"
         "        try:\n"
-        "            pdf_passwords = json.loads(raw_pdf_passwords)\n"
+        "            document_passwords = json.loads(raw_document_passwords)\n"
         "        except (json.JSONDecodeError, TypeError):\n"
-        "            return get_error_data_result(message=\"pdf_passwords must be a JSON array.\", code=RetCode.ARGUMENT_ERROR)\n"
-        "        if not isinstance(pdf_passwords, list) or len(pdf_passwords) != len(file_objs) or any(password is not None and not isinstance(password, str) for password in pdf_passwords):\n"
-        "            return get_error_data_result(message=\"pdf_passwords must contain one string or null for each uploaded file.\", code=RetCode.ARGUMENT_ERROR)\n\n"
+        "            return get_error_data_result(message=\"document_passwords must be a JSON array.\", code=RetCode.ARGUMENT_ERROR)\n"
+        "        if not isinstance(document_passwords, list) or len(document_passwords) != len(file_objs) or any(password is not None and not isinstance(password, str) for password in document_passwords):\n"
+        "            return get_error_data_result(message=\"document_passwords must contain one string or null for each uploaded file.\", code=RetCode.ARGUMENT_ERROR)\n\n"
         "    err, files = await thread_pool_exec(\n"
         "        FileService.upload_document,\n",
-        "parse per-file PDF passwords",
+        "parse per-file document passwords",
     )
     text = replace_once(
         text,
         "        parser_config_override=parser_config_override,\n"
         "    )\n",
         "        parser_config_override=parser_config_override,\n"
-        "        pdf_passwords=pdf_passwords,\n"
+        "        document_passwords=document_passwords,\n"
         "    )\n",
-        "pass PDF passwords to upload service",
+        "pass document passwords to upload service",
     )
     text = replace_once(
         text,
@@ -194,7 +224,7 @@ def main() -> None:
     text = replace_once(
         text,
         "import logging\n",
-        "import logging\n\nfrom lig_runtime.pdf_password import sanitize_document_response\n",
+        "import logging\n\nfrom lig_runtime.document_password import sanitize_document_response\n",
         "document response sanitizer import",
     )
     text = replace_once(
@@ -218,13 +248,13 @@ def main() -> None:
     text = replace_once(
         text,
         "import logging\n",
-        "import logging\n\nfrom lig_runtime.pdf_password import secure_parser_config, validate_pdf_access\n",
-        "file service PDF password import",
+        "import logging\n\nfrom lig_runtime.document_password import secure_parser_config, validate_document_access\n",
+        "file service document password import",
     )
     text = replace_once(
         text,
         '    def upload_document(self, kb, file_objs, user_id, src="local", parent_path: str | None = None, parser_config_override: dict | None = None):',
-        '    def upload_document(self, kb, file_objs, user_id, src="local", parent_path: str | None = None, parser_config_override: dict | None = None, pdf_passwords: list[str | None] | None = None):',
+        '    def upload_document(self, kb, file_objs, user_id, src="local", parent_path: str | None = None, parser_config_override: dict | None = None, document_passwords: list[str | None] | None = None):',
         "upload service password argument",
     )
     text = replace_once(
@@ -234,20 +264,22 @@ def main() -> None:
         "        err, files = [], []\n"
         "        for file_index, file in enumerate(file_objs):\n"
         "            file_parser_config = merged_parser_config\n"
-        "            if pdf_passwords and pdf_passwords[file_index]:\n"
+        "            if document_passwords and document_passwords[file_index]:\n"
         "                file_parser_config, _ = secure_parser_config(\n"
-        "                    {**merged_parser_config, \"pdf_password\": pdf_passwords[file_index]}, file.filename\n"
+        "                    {**merged_parser_config, \"document_password\": document_passwords[file_index]}, file.filename\n"
         "                )\n",
-        "per-file secured password configuration",
+        "per-file secured document password configuration",
     )
     text = replace_once(
         text,
+        "                blob = file.read()\n"
         "                if filetype == FileType.PDF.value:\n"
         "                    blob = read_potential_broken_pdf(blob)\n",
+        "                blob = file.read()\n"
+        "                validate_document_access(filename, blob, file_parser_config)\n"
         "                if filetype == FileType.PDF.value:\n"
-        "                    validate_pdf_access(filename, blob, file_parser_config)\n"
         "                    blob = read_potential_broken_pdf(blob)\n",
-        "validate encrypted PDF upload",
+        "validate password-protected document upload",
     )
     text = replace_once(
         text,
@@ -264,7 +296,7 @@ def main() -> None:
         "        file_bin = settings.STORAGE_IMPL.get(bucket, name)\n"
         "        pages = PdfParser.total_page_number(doc[\"name\"], file_bin)\n",
         "        file_bin = settings.STORAGE_IMPL.get(bucket, name)\n"
-        "        from lig_runtime.pdf_password import encrypted_pdf_page_count\n\n"
+        "        from lig_runtime.document_password import encrypted_pdf_page_count\n\n"
         "        pages = encrypted_pdf_page_count(doc[\"name\"], file_bin, doc.get(\"parser_config\"))\n"
         "        if pages is None:\n"
         "            pages = PdfParser.total_page_number(doc[\"name\"], file_bin)\n",
@@ -284,12 +316,18 @@ def main() -> None:
         "            b, n = File2DocumentService.get_storage_address(doc_id=self._canvas._doc_id)\n"
         "            blob = settings.STORAGE_IMPL.get(b, n)\n"
         "            from api.db.services.document_service import DocumentService\n"
-        "            from lig_runtime.pdf_password import prepare_pdf_for_parsing\n\n"
+        "            from lig_runtime.document_password import prepare_document_for_parsing\n\n"
         "            found, document = DocumentService.get_by_id(self._canvas._doc_id)\n"
         "            if found:\n"
-        "                blob, _ = prepare_pdf_for_parsing(name, blob, document.parser_config)\n"
+        "                name, blob, _ = prepare_document_for_parsing(name, blob, document.parser_config)\n"
         "        else:\n",
-        "pipeline PDF decryption",
+        "pipeline document decryption",
+    )
+    text = replace_once(
+        text,
+        "            if from_upstream.name.split(\".\")[-1].lower() not in conf.get(\"suffix\", []):\n",
+        "            if name.split(\".\")[-1].lower() not in conf.get(\"suffix\", []):\n",
+        "prepared pipeline filename selection",
     )
     pipeline_parser_target.write_text(text, encoding="utf-8")
 
@@ -302,10 +340,10 @@ def main() -> None:
         "        bucket, name = File2DocumentService.get_storage_address(doc_id=canvas._doc_id)\n"
         "        blob = settings.STORAGE_IMPL.get(bucket, name)\n"
         "        from api.db.services.document_service import DocumentService\n"
-        "        from lig_runtime.pdf_password import prepare_pdf_for_parsing\n\n"
+        "        from lig_runtime.document_password import prepare_document_for_parsing\n\n"
         "        found, document = DocumentService.get_by_id(canvas._doc_id)\n"
         "        if found:\n"
-        "            blob, _ = prepare_pdf_for_parsing(document.name, blob, document.parser_config)\n"
+        "            _, blob, _ = prepare_document_for_parsing(document.name, blob, document.parser_config)\n"
         "        return blob\n",
         "pipeline PDF preview decryption",
     )
@@ -316,7 +354,7 @@ def main() -> None:
     text = replace_once(
         text,
         "import logging\n",
-        "import logging\n\nfrom lig_runtime.pdf_password import sanitize_document_response\n",
+        "import logging\n\nfrom lig_runtime.document_password import sanitize_document_response\n",
         "chunk API document sanitizer import",
     )
     text = replace_once(
@@ -326,6 +364,62 @@ def main() -> None:
         "sanitize chunk API document response",
     )
     chunk_api_target.write_text(text, encoding="utf-8")
+
+    file_utils_target = checked_target(Path(sys.argv[11]), EXPECTED_FILE_UTILS_SHA256, "file_utils.py")
+    text = file_utils_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "|html|sql|epub)$",
+        "|html|sql|epub|hwp|hwpx)$",
+        "HWP and HWPX upload extensions",
+    )
+    file_utils_target.write_text(text, encoding="utf-8")
+
+    refactored_chunk_builder_target = checked_target(
+        Path(sys.argv[12]),
+        EXPECTED_REFACTORED_CHUNK_BUILDER_SHA256,
+        "task_executor_refactor/chunk_builder.py",
+    )
+    text = refactored_chunk_builder_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    try:\n"
+        "        # Merge table parser config\n"
+        "        parser_config = merge_table_parser_config_from_kb(ctx.raw_task)\n\n"
+        "        async with ctx.chunk_limiter:\n",
+        "    try:\n"
+        "        # Merge table parser config and prepare protected documents before parsing.\n"
+        "        parser_config = merge_table_parser_config_from_kb(ctx.raw_task)\n"
+        "        from lig_runtime.document_password import prepare_document_for_parsing\n\n"
+        "        parser_filename, binary, parser_config = prepare_document_for_parsing(\n"
+        "            ctx.name, binary, parser_config\n"
+        "        )\n\n"
+        "        async with ctx.chunk_limiter:\n",
+        "refactored executor document decryption",
+    )
+    text = replace_once(
+        text,
+        "                ctx.name,\n"
+        "                binary=binary,\n",
+        "                parser_filename,\n"
+        "                binary=binary,\n",
+        "refactored executor prepared parser filename",
+    )
+    refactored_chunk_builder_target.write_text(text, encoding="utf-8")
+
+    refactored_task_handler_target = checked_target(
+        Path(sys.argv[13]),
+        EXPECTED_REFACTORED_TASK_HANDLER_SHA256,
+        "task_executor_refactor/task_handler.py",
+    )
+    text = refactored_task_handler_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        '                logging.info(f"GraphRAG task result for task {ctx.raw_task}:\\n{result}")',
+        '                logging.info(f"GraphRAG task result for task {ctx.id}:\\n{result}")',
+        "refactored GraphRAG task log secret redaction",
+    )
+    refactored_task_handler_target.write_text(text, encoding="utf-8")
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:

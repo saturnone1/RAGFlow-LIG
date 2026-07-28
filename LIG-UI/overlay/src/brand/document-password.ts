@@ -5,12 +5,29 @@ export type UploadFileValue =
       path?: string;
     };
 
+const passwordExtensions = new Set([
+  'pdf',
+  'doc',
+  'docx',
+  'xls',
+  'xlsx',
+  'ppt',
+  'pptx',
+  'hwp',
+  'hwpx',
+]);
+
 export function getUploadFile(value: UploadFileValue): File {
   return value instanceof File ? value : value.file;
 }
 
-export function isPdfUpload(value: UploadFileValue): boolean {
-  return getUploadFile(value).name.toLowerCase().endsWith('.pdf');
+export function supportsDocumentPassword(value: UploadFileValue): boolean {
+  const extension = getUploadFile(value).name.toLowerCase().split('.').pop();
+  return supportsPasswordExtension(extension);
+}
+
+export function supportsPasswordExtension(extension?: string): boolean {
+  return extension !== undefined && passwordExtensions.has(extension.toLowerCase());
 }
 
 export function getUploadFilePasswordKey(value: UploadFileValue): string {

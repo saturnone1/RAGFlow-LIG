@@ -28,7 +28,7 @@ RUN node /build/lig-ui/verify-typecheck-baseline.mjs snapshot /tmp/ragflow-v0.26
         src/pages/dataset/dataset-setting/form-schema.test.ts \
         --ext .ts,.tsx --report-unused-disable-directives \
     && npx jest \
-        src/brand/pdf-password.test.ts \
+        src/brand/document-password.test.ts \
         src/pages/dataset/dataset-setting/form-schema.test.ts \
         --no-cache --runInBand --coverage=false \
     && npm run build
@@ -49,6 +49,9 @@ RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/rag/flow/parser/parser.py \
         /ragflow/rag/flow/parser/pdf_chunk_metadata.py \
         /ragflow/api/apps/restful_apis/chunk_api.py \
+        /ragflow/api/utils/file_utils.py \
+        /ragflow/rag/svr/task_executor_refactor/chunk_builder.py \
+        /ragflow/rag/svr/task_executor_refactor/task_handler.py \
     && rm /tmp/apply-lig-runtime-patches.py
 RUN rm -rf /ragflow/web/dist && mkdir -p /ragflow/web/dist
 COPY --from=web-builder /build/web/dist/ /ragflow/web/dist/

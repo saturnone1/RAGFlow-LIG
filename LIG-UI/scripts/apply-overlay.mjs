@@ -307,31 +307,31 @@ write('src/pages/dataset/dataset-setting/saving-button.tsx', content);
 
 content = read('src/components/file-upload-dialog/index.tsx');
 content =
-  "import { getUploadFile, getUploadFilePasswordKey, isPdfUpload } from '@/brand/pdf-password';\n" +
+  "import { getUploadFile, getUploadFilePasswordKey, supportsDocumentPassword } from '@/brand/document-password';\n" +
   content;
 content = replaceOnce(
   content,
   "import { Switch } from '../ui/switch';",
   "import { Switch } from '../ui/switch';\nimport { Input } from '../ui/input';",
-  'PDF password upload input import',
+  'document password upload input import',
 );
 content = replaceOnce(
   content,
   "    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
-  "    pdfPasswords: z.record(z.string().max(1024)).optional(),\n    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
-  'PDF password upload schema',
+  "    documentPasswords: z.record(z.string().max(1024)).optional(),\n    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
+  'document password upload schema',
 );
 content = replaceOnce(
   content,
   "      fileList: [],\n      tableColumnMode: 'auto',",
-  "      fileList: [],\n      pdfPasswords: {},\n      tableColumnMode: 'auto',",
-  'PDF password upload defaults',
+  "      fileList: [],\n      documentPasswords: {},\n      tableColumnMode: 'auto',",
+  'document password upload defaults',
 );
 content = replaceOnce(
   content,
   "  const [extractedColumns, setExtractedColumns] = useState<string[]>([]);",
-  "  const selectedFiles = form.watch('fileList');\n  const pdfFiles = selectedFiles.filter(isPdfUpload);\n\n  const [extractedColumns, setExtractedColumns] = useState<string[]>([]);",
-  'selected PDF upload files',
+  "  const selectedFiles = form.watch('fileList');\n  const passwordDocuments = selectedFiles.filter(supportsDocumentPassword);\n\n  const [extractedColumns, setExtractedColumns] = useState<string[]>([]);",
+  'selected password-capable upload files',
 );
 content = replaceOnce(
   content,
@@ -340,23 +340,23 @@ content = replaceOnce(
         {showColumnConfig && (`,
   `        </RAGFlowFormItem>
 
-        {pdfFiles.length > 0 && (
+        {passwordDocuments.length > 0 && (
           <div className="space-y-3 rounded-md border p-3">
             <div>
               <Label className="text-sm font-medium">
-                {t('fileManager.pdfPasswords')}
+                {t('fileManager.documentPasswords')}
               </Label>
               <p className="text-sm text-muted-foreground">
-                {t('fileManager.pdfPasswordsTip')}
+                {t('fileManager.documentPasswordsTip')}
               </p>
             </div>
-            {pdfFiles.map((value) => {
+            {passwordDocuments.map((value) => {
               const file = getUploadFile(value);
               const passwordKey = getUploadFilePasswordKey(value);
               return (
                 <RAGFlowFormItem
                   key={passwordKey}
-                  name={\`pdfPasswords.\${passwordKey}\`}
+                  name={\`documentPasswords.\${passwordKey}\`}
                   label={file.name}
                 >
                   {(field) => (
@@ -365,7 +365,7 @@ content = replaceOnce(
                       value={field.value || ''}
                       type="password"
                       autoComplete="new-password"
-                      placeholder={t('fileManager.pdfPasswordPlaceholder')}
+                      placeholder={t('fileManager.documentPasswordPlaceholder')}
                     />
                   )}
                 </RAGFlowFormItem>
@@ -375,7 +375,7 @@ content = replaceOnce(
         )}
 
         {showColumnConfig && (`,
-  'per-file PDF password inputs',
+  'per-file document password inputs',
 );
 write('src/components/file-upload-dialog/index.tsx', content);
 
@@ -383,32 +383,32 @@ content = read('src/pages/dataset/dataset/use-upload-document.ts');
 content = replaceOnce(
   content,
   "      tableColumnRoles,\n    }: UploadFormSchemaType) => {",
-  "      tableColumnRoles,\n      pdfPasswords,\n    }: UploadFormSchemaType) => {",
-  'PDF passwords upload form value',
+  "      tableColumnRoles,\n      documentPasswords,\n    }: UploadFormSchemaType) => {",
+  'document passwords upload form value',
 );
 content = replaceOnce(
   content,
   '        const ret = await uploadDocument(fileList as File[], parserConfig);',
-  '        const ret = await uploadDocument(fileList, parserConfig, pdfPasswords);',
-  'submit PDF passwords',
+  '        const ret = await uploadDocument(fileList, parserConfig, documentPasswords);',
+  'submit document passwords',
 );
 write('src/pages/dataset/dataset/use-upload-document.ts', content);
 
 content = read('src/hooks/use-document-request.ts');
 content =
-  "import { getUploadFile, getUploadFilePasswordKey, type UploadFileValue } from '@/brand/pdf-password';\n" +
+  "import { getUploadFile, getUploadFilePasswordKey, type UploadFileValue } from '@/brand/document-password';\n" +
   content;
 content = replaceOnce(
   content,
   '{ fileList: File[]; parserConfig?: Record<string, any> }',
-  '{ fileList: UploadFileValue[]; parserConfig?: Record<string, any>; pdfPasswords?: Record<string, string> }',
-  'upload mutation PDF password type',
+  '{ fileList: UploadFileValue[]; parserConfig?: Record<string, any>; documentPasswords?: Record<string, string> }',
+  'upload mutation document password type',
 );
 content = replaceOnce(
   content,
   'mutationFn: async ({ fileList, parserConfig }) => {',
-  'mutationFn: async ({ fileList, parserConfig, pdfPasswords }) => {',
-  'upload mutation PDF passwords',
+  'mutationFn: async ({ fileList, parserConfig, documentPasswords }) => {',
+  'upload mutation document passwords',
 );
 content = replaceOnce(
   content,
@@ -419,14 +419,14 @@ content = replaceOnce(
 content = replaceOnce(
   content,
   "      if (parserConfig) {\n        formData.append('parser_config', JSON.stringify(parserConfig));\n      }",
-  "      if (parserConfig) {\n        formData.append('parser_config', JSON.stringify(parserConfig));\n      }\n      if (pdfPasswords) {\n        const passwords = fileList.map(\n          (file) => pdfPasswords[getUploadFilePasswordKey(file)] || null,\n        );\n        formData.append('pdf_passwords', JSON.stringify(passwords));\n      }",
-  'upload PDF password form data',
+  "      if (parserConfig) {\n        formData.append('parser_config', JSON.stringify(parserConfig));\n      }\n      if (documentPasswords) {\n        const passwords = fileList.map(\n          (file) => documentPasswords[getUploadFilePasswordKey(file)] || null,\n        );\n        formData.append('document_passwords', JSON.stringify(passwords));\n      }",
+  'upload document password form data',
 );
 content = replaceOnce(
   content,
   "    (fileList: File[], parserConfig?: Record<string, any>) =>\n      mutateAsync({ fileList, parserConfig }),",
-  "    (\n      fileList: UploadFileValue[],\n      parserConfig?: Record<string, any>,\n      pdfPasswords?: Record<string, string>,\n    ) => mutateAsync({ fileList, parserConfig, pdfPasswords }),",
-  'upload callback PDF password argument',
+  "    (\n      fileList: UploadFileValue[],\n      parserConfig?: Record<string, any>,\n      documentPasswords?: Record<string, string>,\n    ) => mutateAsync({ fileList, parserConfig, documentPasswords }),",
+  'upload callback document password argument',
 );
 write('src/hooks/use-document-request.ts', content);
 
@@ -434,8 +434,8 @@ content = read('src/interfaces/database/document.ts');
 content = replaceOnce(
   content,
   '  enable_metadata?: boolean;\n}',
-  '  enable_metadata?: boolean;\n  pdf_password_configured?: boolean;\n  pdf_password?: string;\n  clear_pdf_password?: boolean;\n}',
-  'document PDF password status',
+  '  enable_metadata?: boolean;\n  document_password_configured?: boolean;\n  document_password?: string;\n  clear_document_password?: boolean;\n}',
+  'document password status',
 );
 write('src/interfaces/database/document.ts', content);
 
@@ -443,53 +443,56 @@ content = read('src/interfaces/request/document.ts');
 content = replaceOnce(
   content,
   '  enable_metadata?: boolean;\n}',
-  '  enable_metadata?: boolean;\n  pdf_password?: string | null;\n  clear_pdf_password?: boolean;\n}',
-  'document PDF password update request',
+  '  enable_metadata?: boolean;\n  document_password?: string | null;\n  clear_document_password?: boolean;\n}',
+  'document password update request',
 );
 write('src/interfaces/request/document.ts', content);
 
 content = read('src/components/chunk-method-dialog/index.tsx');
+content =
+  "import { supportsPasswordExtension } from '@/brand/document-password';\n" +
+  content;
 content = replaceOnce(
   content,
   "        task_page_size: z.coerce.number().optional(),",
-  "        task_page_size: z.coerce.number().optional(),\n        pdf_password: z.string().max(1024).optional(),\n        clear_pdf_password: z.boolean().optional(),",
-  'document PDF password form schema',
+  "        task_page_size: z.coerce.number().optional(),\n        document_password: z.string().max(1024).optional(),\n        clear_document_password: z.boolean().optional(),",
+  'document password form schema',
 );
 content = replaceOnce(
   content,
   '    const parserConfig = data.parser_config;',
   `    const {
-      pdf_password: pdfPassword,
-      clear_pdf_password: clearPdfPassword,
+      document_password: documentPassword,
+      clear_document_password: clearDocumentPassword,
       ...parserConfig
     } = data.parser_config;`,
-  'extract document PDF password update',
+  'extract document password update',
 );
 content = replaceOnce(
   content,
   "        pages: parserConfig?.pages?.map((x: any) => [x.from, x.to]) ?? [],",
-  "        pages: parserConfig?.pages?.map((x: any) => [x.from, x.to]) ?? [],\n        ...(clearPdfPassword\n          ? { pdf_password: null, clear_pdf_password: true }\n          : pdfPassword\n            ? { pdf_password: pdfPassword }\n            : {}),",
-  'submit changed document PDF password',
+  "        pages: parserConfig?.pages?.map((x: any) => [x.from, x.to]) ?? [],\n        ...(clearDocumentPassword\n          ? { document_password: null, clear_document_password: true }\n          : documentPassword\n            ? { document_password: documentPassword }\n            : {}),",
+  'submit changed document password',
 );
 content = replaceOnce(
   content,
   "          ...omit(parserConfig, 'pages'),",
-  "          ...omit(parserConfig, ['pages', 'pdf_password_configured']),\n          pdf_password: '',\n          clear_pdf_password: false,",
-  'reset private document PDF password fields',
+  "          ...omit(parserConfig, ['pages', 'document_password_configured']),\n          document_password: '',\n          clear_document_password: false,",
+  'reset private document password fields',
 );
 content = replaceOnce(
   content,
   `              {showPages && parseType === ParseType.BuiltIn && (
                 <DynamicPageRange />
               )}`,
-  `              {isPdf && (
+  `              {supportsPasswordExtension(documentExtension) && (
                 <div className="space-y-3 rounded-md border p-3">
                   <FormField
                     control={form.control}
-                    name="parser_config.pdf_password"
+                    name="parser_config.document_password"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{t('fileManager.pdfPassword')}</FormLabel>
+                        <FormLabel>{t('fileManager.documentPassword')}</FormLabel>
                         <FormControl>
                           <Input
                             {...field}
@@ -497,29 +500,29 @@ content = replaceOnce(
                             type="password"
                             autoComplete="new-password"
                             disabled={form.watch(
-                              'parser_config.clear_pdf_password',
+                              'parser_config.clear_document_password',
                             )}
                             placeholder={
-                              parserConfig?.pdf_password_configured
-                                ? t('fileManager.pdfPasswordKeepPlaceholder')
-                                : t('fileManager.pdfPasswordPlaceholder')
+                              parserConfig?.document_password_configured
+                                ? t('fileManager.documentPasswordKeepPlaceholder')
+                                : t('fileManager.documentPasswordPlaceholder')
                             }
                           />
                         </FormControl>
                         <p className="text-sm text-muted-foreground">
-                          {t('fileManager.pdfPasswordUpdateTip')}
+                          {t('fileManager.documentPasswordUpdateTip')}
                         </p>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
-                  {parserConfig?.pdf_password_configured && (
+                  {parserConfig?.document_password_configured && (
                     <FormField
                       control={form.control}
-                      name="parser_config.clear_pdf_password"
+                      name="parser_config.clear_document_password"
                       render={({ field }) => (
                         <FormItem className="flex items-center justify-between gap-4">
-                          <FormLabel>{t('fileManager.pdfPasswordClear')}</FormLabel>
+                          <FormLabel>{t('fileManager.documentPasswordClear')}</FormLabel>
                           <Switch
                             checked={field.value}
                             onCheckedChange={field.onChange}
@@ -534,34 +537,34 @@ content = replaceOnce(
               {showPages && parseType === ParseType.BuiltIn && (
                 <DynamicPageRange />
               )}`,
-  'document PDF password settings',
+  'document password settings',
 );
 content = replaceOnce(
   content,
   "import { Input } from '../ui/input';",
   "import { Input } from '../ui/input';\nimport { Switch } from '../ui/switch';",
-  'document PDF password clear switch',
+  'document password clear switch',
 );
 write('src/components/chunk-method-dialog/index.tsx', content);
 
 for (const [localePath, values] of [
   ['src/locales/en.ts', {
-    label: 'PDF passwords',
-    tip: 'Enter a password for each protected PDF. Unprotected PDFs can be left blank.',
-    password: 'PDF password',
-    placeholder: 'Enter the PDF password',
+    label: 'Document passwords',
+    tip: 'Enter a file-open password for each protected PDF, Office, HWP, or HWPX document. Unprotected files can be left blank.',
+    password: 'Document password',
+    placeholder: 'Enter the file-open password',
     keep: 'Leave blank to keep the saved password',
     update: 'Save a new password here, then run the document again. The password is never returned by the API.',
-    clear: 'Remove the saved PDF password',
+    clear: 'Remove the saved document password',
   }],
   ['src/locales/ko.ts', {
-    label: 'PDF 비밀번호',
-    tip: '암호가 설정된 PDF마다 비밀번호를 입력하세요. 암호가 없는 PDF는 비워 두면 됩니다.',
-    password: 'PDF 비밀번호',
-    placeholder: 'PDF 비밀번호 입력',
+    label: '문서 비밀번호',
+    tip: '암호가 설정된 PDF, Office, HWP, HWPX마다 파일 열기 비밀번호를 입력하세요. 암호가 없는 파일은 비워 두면 됩니다.',
+    password: '문서 비밀번호',
+    placeholder: '파일 열기 비밀번호 입력',
     keep: '비워 두면 저장된 비밀번호를 유지합니다',
     update: '새 비밀번호를 저장한 뒤 문서를 다시 실행하세요. 비밀번호는 API 응답에 노출되지 않습니다.',
-    clear: '저장된 PDF 비밀번호 제거',
+    clear: '저장된 문서 비밀번호 제거',
   }],
 ]) {
   content = read(localePath);
@@ -569,8 +572,8 @@ for (const [localePath, values] of [
     content,
     "      parseOnCreation: " + (localePath.endsWith('/ko.ts') ? "'생성 시 파싱'," : "'Parse on creation',"),
     "      parseOnCreation: " + (localePath.endsWith('/ko.ts') ? "'생성 시 파싱'," : "'Parse on creation',") +
-      `\n      pdfPasswords: '${values.label}',\n      pdfPasswordsTip: '${values.tip}',\n      pdfPassword: '${values.password}',\n      pdfPasswordPlaceholder: '${values.placeholder}',\n      pdfPasswordKeepPlaceholder: '${values.keep}',\n      pdfPasswordUpdateTip: '${values.update}',\n      pdfPasswordClear: '${values.clear}',`,
-    `PDF password ${localePath} locale`,
+      `\n      documentPasswords: '${values.label}',\n      documentPasswordsTip: '${values.tip}',\n      documentPassword: '${values.password}',\n      documentPasswordPlaceholder: '${values.placeholder}',\n      documentPasswordKeepPlaceholder: '${values.keep}',\n      documentPasswordUpdateTip: '${values.update}',\n      documentPasswordClear: '${values.clear}',`,
+    `document password ${localePath} locale`,
   );
   write(localePath, content);
 }

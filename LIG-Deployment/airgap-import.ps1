@@ -104,21 +104,32 @@ if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
     Write-Warning "Created LIG-Deployment\.env.secret from the example. Replace its placeholder API key after creating a RAGFlow API key."
 }
 $secretLines = @(Get-Content -LiteralPath $secretFile)
-$pdfKeyIndex = -1
+$documentKeyIndex = -1
+$legacyKeyIndex = -1
 for ($index = 0; $index -lt $secretLines.Count; $index++) {
-    if ($secretLines[$index] -match '^\s*LIG_PDF_PASSWORD_KEY=') { $pdfKeyIndex = $index; break }
+    if ($secretLines[$index] -match '^\s*LIG_DOCUMENT_PASSWORD_KEY=') { $documentKeyIndex = $index }
+    if ($secretLines[$index] -match '^\s*LIG_PDF_PASSWORD_KEY=') { $legacyKeyIndex = $index }
 }
-$pdfKeyValue = if ($pdfKeyIndex -ge 0) { ($secretLines[$pdfKeyIndex] -split '=', 2)[1].Trim() } else { "" }
-if ([string]::IsNullOrWhiteSpace($pdfKeyValue) -or $pdfKeyValue -eq "generate-a-base64-encoded-32-byte-key") {
+$documentKeyValue = if ($documentKeyIndex -ge 0) { ($secretLines[$documentKeyIndex] -split '=', 2)[1].Trim() } else { "" }
+if (([string]::IsNullOrWhiteSpace($documentKeyValue) -or $documentKeyValue -eq "generate-a-base64-encoded-32-byte-key") -and $legacyKeyIndex -ge 0) {
+    $legacyKeyValue = ($secretLines[$legacyKeyIndex] -split '=', 2)[1].Trim()
+    if (-not [string]::IsNullOrWhiteSpace($legacyKeyValue) -and $legacyKeyValue -ne "generate-a-base64-encoded-32-byte-key") {
+        if ($documentKeyIndex -ge 0) { $secretLines[$documentKeyIndex] = "LIG_DOCUMENT_PASSWORD_KEY=$legacyKeyValue" }
+        else { $secretLines[$legacyKeyIndex] = "LIG_DOCUMENT_PASSWORD_KEY=$legacyKeyValue"; $documentKeyIndex = $legacyKeyIndex; $legacyKeyIndex = -1 }
+        $documentKeyValue = $legacyKeyValue
+    }
+}
+if ([string]::IsNullOrWhiteSpace($documentKeyValue) -or $documentKeyValue -eq "generate-a-base64-encoded-32-byte-key") {
     $keyBytes = New-Object byte[] 32
     $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
     try { $generator.GetBytes($keyBytes) }
     finally { $generator.Dispose() }
-    $keyLine = "LIG_PDF_PASSWORD_KEY=$([Convert]::ToBase64String($keyBytes))"
-    if ($pdfKeyIndex -ge 0) { $secretLines[$pdfKeyIndex] = $keyLine } else { $secretLines += $keyLine }
-    [IO.File]::WriteAllLines($secretFile, $secretLines, [Text.UTF8Encoding]::new($false))
-    Write-Host "Generated the local PDF password encryption key."
+    $keyLine = "LIG_DOCUMENT_PASSWORD_KEY=$([Convert]::ToBase64String($keyBytes))"
+    if ($documentKeyIndex -ge 0) { $secretLines[$documentKeyIndex] = $keyLine } else { $secretLines += $keyLine }
+    Write-Host "Generated the local document password encryption key."
 }
+if ($legacyKeyIndex -ge 0) { $secretLines = @($secretLines | Where-Object { $_ -notmatch '^\s*LIG_PDF_PASSWORD_KEY=' }) }
+[IO.File]::WriteAllLines($secretFile, $secretLines, [Text.UTF8Encoding]::new($false))
 $logDirectory = Join-Path $PSScriptRoot "ragflow-logs"
 if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
     New-Item -ItemType Directory -Path $logDirectory | Out-Null
