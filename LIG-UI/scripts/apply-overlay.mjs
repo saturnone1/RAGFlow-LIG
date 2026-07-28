@@ -25,6 +25,12 @@ const expectedHashes = {
   'src/constants/agent.tsx': 'cc248cba0aa8d9ef309a48097ad24cab5da828658f9a896ba1810f2004e2f67c',
   'src/pages/dataset/dataset-setting/form-schema.ts': '42414b182a33d7ec500229bf3ee971a5c2ccedf247b5312b39b379d56e5f8df2',
   'src/pages/dataset/dataset-setting/saving-button.tsx': '07b515ed2b8bf3b1c32c3a8e3d431e5971bb8722aca21da867334da629f7fef4',
+  'src/components/file-upload-dialog/index.tsx': 'c502c71104ff5eeceb560b20874d14ebc9ef431c769c2fafa0501db4f605625c',
+  'src/pages/dataset/dataset/use-upload-document.ts': '58bd2fc4439f3d47abaa8ad123f79d2a64b3e3bd5415e13d50103dfd41ca0f0f',
+  'src/hooks/use-document-request.ts': '2033e111411218c3299412ffd65ce2d17c082b670bd263e5ca1ed99e754e1bfc',
+  'src/components/chunk-method-dialog/index.tsx': '0dec00d6c24a26a9594414668b4695b4a2a357767c2f3bd4f19a0a4b8c707463',
+  'src/interfaces/database/document.ts': 'ab4093f0eedadc34063f100c27f362ff4cb4ba87a4be84c91ff973902ec85736',
+  'src/interfaces/request/document.ts': '99cff0a70f4d815e6f7bcbae3711f81d7704b8f96bd8775c8e1f644aff345cc0',
 };
 
 function sha256(path) {
@@ -298,6 +304,276 @@ content = replaceOnce(
   'PaddleOCR whole-PDF task configuration',
 );
 write('src/pages/dataset/dataset-setting/saving-button.tsx', content);
+
+content = read('src/components/file-upload-dialog/index.tsx');
+content =
+  "import { getUploadFile, getUploadFilePasswordKey, isPdfUpload } from '@/brand/pdf-password';\n" +
+  content;
+content = replaceOnce(
+  content,
+  "import { Switch } from '../ui/switch';",
+  "import { Switch } from '../ui/switch';\nimport { Input } from '../ui/input';",
+  'PDF password upload input import',
+);
+content = replaceOnce(
+  content,
+  "    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
+  "    pdfPasswords: z.record(z.string().max(1024)).optional(),\n    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
+  'PDF password upload schema',
+);
+content = replaceOnce(
+  content,
+  "      fileList: [],\n      tableColumnMode: 'auto',",
+  "      fileList: [],\n      pdfPasswords: {},\n      tableColumnMode: 'auto',",
+  'PDF password upload defaults',
+);
+content = replaceOnce(
+  content,
+  "  const [extractedColumns, setExtractedColumns] = useState<string[]>([]);",
+  "  const selectedFiles = form.watch('fileList');\n  const pdfFiles = selectedFiles.filter(isPdfUpload);\n\n  const [extractedColumns, setExtractedColumns] = useState<string[]>([]);",
+  'selected PDF upload files',
+);
+content = replaceOnce(
+  content,
+  `        </RAGFlowFormItem>
+
+        {showColumnConfig && (`,
+  `        </RAGFlowFormItem>
+
+        {pdfFiles.length > 0 && (
+          <div className="space-y-3 rounded-md border p-3">
+            <div>
+              <Label className="text-sm font-medium">
+                {t('fileManager.pdfPasswords')}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t('fileManager.pdfPasswordsTip')}
+              </p>
+            </div>
+            {pdfFiles.map((value) => {
+              const file = getUploadFile(value);
+              const passwordKey = getUploadFilePasswordKey(value);
+              return (
+                <RAGFlowFormItem
+                  key={passwordKey}
+                  name={\`pdfPasswords.\${passwordKey}\`}
+                  label={file.name}
+                >
+                  {(field) => (
+                    <Input
+                      {...field}
+                      value={field.value || ''}
+                      type="password"
+                      autoComplete="new-password"
+                      placeholder={t('fileManager.pdfPasswordPlaceholder')}
+                    />
+                  )}
+                </RAGFlowFormItem>
+              );
+            })}
+          </div>
+        )}
+
+        {showColumnConfig && (`,
+  'per-file PDF password inputs',
+);
+write('src/components/file-upload-dialog/index.tsx', content);
+
+content = read('src/pages/dataset/dataset/use-upload-document.ts');
+content = replaceOnce(
+  content,
+  "      tableColumnRoles,\n    }: UploadFormSchemaType) => {",
+  "      tableColumnRoles,\n      pdfPasswords,\n    }: UploadFormSchemaType) => {",
+  'PDF passwords upload form value',
+);
+content = replaceOnce(
+  content,
+  '        const ret = await uploadDocument(fileList as File[], parserConfig);',
+  '        const ret = await uploadDocument(fileList, parserConfig, pdfPasswords);',
+  'submit PDF passwords',
+);
+write('src/pages/dataset/dataset/use-upload-document.ts', content);
+
+content = read('src/hooks/use-document-request.ts');
+content =
+  "import { getUploadFile, getUploadFilePasswordKey, type UploadFileValue } from '@/brand/pdf-password';\n" +
+  content;
+content = replaceOnce(
+  content,
+  '{ fileList: File[]; parserConfig?: Record<string, any> }',
+  '{ fileList: UploadFileValue[]; parserConfig?: Record<string, any>; pdfPasswords?: Record<string, string> }',
+  'upload mutation PDF password type',
+);
+content = replaceOnce(
+  content,
+  'mutationFn: async ({ fileList, parserConfig }) => {',
+  'mutationFn: async ({ fileList, parserConfig, pdfPasswords }) => {',
+  'upload mutation PDF passwords',
+);
+content = replaceOnce(
+  content,
+  "      fileList.forEach((file: any) => {\n        formData.append('file', file);\n      });",
+  "      fileList.forEach((file) => {\n        formData.append('file', getUploadFile(file));\n      });",
+  'unwrap folder upload file values',
+);
+content = replaceOnce(
+  content,
+  "      if (parserConfig) {\n        formData.append('parser_config', JSON.stringify(parserConfig));\n      }",
+  "      if (parserConfig) {\n        formData.append('parser_config', JSON.stringify(parserConfig));\n      }\n      if (pdfPasswords) {\n        const passwords = fileList.map(\n          (file) => pdfPasswords[getUploadFilePasswordKey(file)] || null,\n        );\n        formData.append('pdf_passwords', JSON.stringify(passwords));\n      }",
+  'upload PDF password form data',
+);
+content = replaceOnce(
+  content,
+  "    (fileList: File[], parserConfig?: Record<string, any>) =>\n      mutateAsync({ fileList, parserConfig }),",
+  "    (\n      fileList: UploadFileValue[],\n      parserConfig?: Record<string, any>,\n      pdfPasswords?: Record<string, string>,\n    ) => mutateAsync({ fileList, parserConfig, pdfPasswords }),",
+  'upload callback PDF password argument',
+);
+write('src/hooks/use-document-request.ts', content);
+
+content = read('src/interfaces/database/document.ts');
+content = replaceOnce(
+  content,
+  '  enable_metadata?: boolean;\n}',
+  '  enable_metadata?: boolean;\n  pdf_password_configured?: boolean;\n  pdf_password?: string;\n  clear_pdf_password?: boolean;\n}',
+  'document PDF password status',
+);
+write('src/interfaces/database/document.ts', content);
+
+content = read('src/interfaces/request/document.ts');
+content = replaceOnce(
+  content,
+  '  enable_metadata?: boolean;\n}',
+  '  enable_metadata?: boolean;\n  pdf_password?: string | null;\n  clear_pdf_password?: boolean;\n}',
+  'document PDF password update request',
+);
+write('src/interfaces/request/document.ts', content);
+
+content = read('src/components/chunk-method-dialog/index.tsx');
+content = replaceOnce(
+  content,
+  "        task_page_size: z.coerce.number().optional(),",
+  "        task_page_size: z.coerce.number().optional(),\n        pdf_password: z.string().max(1024).optional(),\n        clear_pdf_password: z.boolean().optional(),",
+  'document PDF password form schema',
+);
+content = replaceOnce(
+  content,
+  '    const parserConfig = data.parser_config;',
+  `    const {
+      pdf_password: pdfPassword,
+      clear_pdf_password: clearPdfPassword,
+      ...parserConfig
+    } = data.parser_config;`,
+  'extract document PDF password update',
+);
+content = replaceOnce(
+  content,
+  "        pages: parserConfig?.pages?.map((x: any) => [x.from, x.to]) ?? [],",
+  "        pages: parserConfig?.pages?.map((x: any) => [x.from, x.to]) ?? [],\n        ...(clearPdfPassword\n          ? { pdf_password: null, clear_pdf_password: true }\n          : pdfPassword\n            ? { pdf_password: pdfPassword }\n            : {}),",
+  'submit changed document PDF password',
+);
+content = replaceOnce(
+  content,
+  "          ...omit(parserConfig, 'pages'),",
+  "          ...omit(parserConfig, ['pages', 'pdf_password_configured']),\n          pdf_password: '',\n          clear_pdf_password: false,",
+  'reset private document PDF password fields',
+);
+content = replaceOnce(
+  content,
+  `              {showPages && parseType === ParseType.BuiltIn && (
+                <DynamicPageRange />
+              )}`,
+  `              {isPdf && (
+                <div className="space-y-3 rounded-md border p-3">
+                  <FormField
+                    control={form.control}
+                    name="parser_config.pdf_password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('fileManager.pdfPassword')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            {...field}
+                            value={field.value || ''}
+                            type="password"
+                            autoComplete="new-password"
+                            disabled={form.watch(
+                              'parser_config.clear_pdf_password',
+                            )}
+                            placeholder={
+                              parserConfig?.pdf_password_configured
+                                ? t('fileManager.pdfPasswordKeepPlaceholder')
+                                : t('fileManager.pdfPasswordPlaceholder')
+                            }
+                          />
+                        </FormControl>
+                        <p className="text-sm text-muted-foreground">
+                          {t('fileManager.pdfPasswordUpdateTip')}
+                        </p>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  {parserConfig?.pdf_password_configured && (
+                    <FormField
+                      control={form.control}
+                      name="parser_config.clear_pdf_password"
+                      render={({ field }) => (
+                        <FormItem className="flex items-center justify-between gap-4">
+                          <FormLabel>{t('fileManager.pdfPasswordClear')}</FormLabel>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </div>
+              )}
+
+              {showPages && parseType === ParseType.BuiltIn && (
+                <DynamicPageRange />
+              )}`,
+  'document PDF password settings',
+);
+content = replaceOnce(
+  content,
+  "import { Input } from '../ui/input';",
+  "import { Input } from '../ui/input';\nimport { Switch } from '../ui/switch';",
+  'document PDF password clear switch',
+);
+write('src/components/chunk-method-dialog/index.tsx', content);
+
+for (const [localePath, values] of [
+  ['src/locales/en.ts', {
+    label: 'PDF passwords',
+    tip: 'Enter a password for each protected PDF. Unprotected PDFs can be left blank.',
+    password: 'PDF password',
+    placeholder: 'Enter the PDF password',
+    keep: 'Leave blank to keep the saved password',
+    update: 'Save a new password here, then run the document again. The password is never returned by the API.',
+    clear: 'Remove the saved PDF password',
+  }],
+  ['src/locales/ko.ts', {
+    label: 'PDF 비밀번호',
+    tip: '암호가 설정된 PDF마다 비밀번호를 입력하세요. 암호가 없는 PDF는 비워 두면 됩니다.',
+    password: 'PDF 비밀번호',
+    placeholder: 'PDF 비밀번호 입력',
+    keep: '비워 두면 저장된 비밀번호를 유지합니다',
+    update: '새 비밀번호를 저장한 뒤 문서를 다시 실행하세요. 비밀번호는 API 응답에 노출되지 않습니다.',
+    clear: '저장된 PDF 비밀번호 제거',
+  }],
+]) {
+  content = read(localePath);
+  content = replaceOnce(
+    content,
+    "      parseOnCreation: " + (localePath.endsWith('/ko.ts') ? "'생성 시 파싱'," : "'Parse on creation',"),
+    "      parseOnCreation: " + (localePath.endsWith('/ko.ts') ? "'생성 시 파싱'," : "'Parse on creation',") +
+      `\n      pdfPasswords: '${values.label}',\n      pdfPasswordsTip: '${values.tip}',\n      pdfPassword: '${values.password}',\n      pdfPasswordPlaceholder: '${values.placeholder}',\n      pdfPasswordKeepPlaceholder: '${values.keep}',\n      pdfPasswordUpdateTip: '${values.update}',\n      pdfPasswordClear: '${values.clear}',`,
+    `PDF password ${localePath} locale`,
+  );
+  write(localePath, content);
+}
 
 cpSync(overlayRoot, webRoot, { recursive: true, force: true });
 

@@ -18,22 +18,37 @@ RUN node /build/lig-ui/verify-typecheck-baseline.mjs snapshot /tmp/ragflow-v0.26
     && node /build/lig-ui/verify-typecheck-baseline.mjs check /tmp/ragflow-v0.26.4-ts-errors.json \
     && npx eslint \
         src/brand \
+        src/components/file-upload-dialog/index.tsx \
+        src/components/chunk-method-dialog/index.tsx \
         src/components/paddleocr-options-form-field.tsx \
+        src/hooks/use-document-request.ts \
         src/layouts/components/mobile-menu-footer.tsx \
         src/pages/home/banner.tsx \
+        src/pages/dataset/dataset/use-upload-document.ts \
         src/pages/dataset/dataset-setting/form-schema.test.ts \
         --ext .ts,.tsx --report-unused-disable-directives \
-    && npx jest src/pages/dataset/dataset-setting/form-schema.test.ts --no-cache --runInBand --coverage=false \
+    && npx jest \
+        src/brand/pdf-password.test.ts \
+        src/pages/dataset/dataset-setting/form-schema.test.ts \
+        --no-cache --runInBand --coverage=false \
     && npm run build
 
 FROM ${RAGFLOW_BASE_IMAGE}
 
 USER root
 COPY LIG-Runtime/apply-runtime-patches.py /tmp/apply-lig-runtime-patches.py
+COPY LIG-Runtime/lig_runtime/ /ragflow/lig_runtime/
 RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/rag/llm/embedding_model.py \
         /ragflow/deepdoc/parser/paddleocr_parser.py \
         /ragflow/rag/svr/task_executor.py \
+        /ragflow/api/apps/restful_apis/document_api.py \
+        /ragflow/api/apps/services/document_api_service.py \
+        /ragflow/api/db/services/file_service.py \
+        /ragflow/api/db/services/task_service.py \
+        /ragflow/rag/flow/parser/parser.py \
+        /ragflow/rag/flow/parser/pdf_chunk_metadata.py \
+        /ragflow/api/apps/restful_apis/chunk_api.py \
     && rm /tmp/apply-lig-runtime-patches.py
 RUN rm -rf /ragflow/web/dist && mkdir -p /ragflow/web/dist
 COPY --from=web-builder /build/web/dist/ /ragflow/web/dist/

@@ -103,6 +103,22 @@ if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot ".env.secret.example") -Destination $secretFile
     Write-Warning "Created LIG-Deployment\.env.secret from the example. Replace its placeholder API key after creating a RAGFlow API key."
 }
+$secretLines = @(Get-Content -LiteralPath $secretFile)
+$pdfKeyIndex = -1
+for ($index = 0; $index -lt $secretLines.Count; $index++) {
+    if ($secretLines[$index] -match '^\s*LIG_PDF_PASSWORD_KEY=') { $pdfKeyIndex = $index; break }
+}
+$pdfKeyValue = if ($pdfKeyIndex -ge 0) { ($secretLines[$pdfKeyIndex] -split '=', 2)[1].Trim() } else { "" }
+if ([string]::IsNullOrWhiteSpace($pdfKeyValue) -or $pdfKeyValue -eq "generate-a-base64-encoded-32-byte-key") {
+    $keyBytes = New-Object byte[] 32
+    $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $generator.GetBytes($keyBytes) }
+    finally { $generator.Dispose() }
+    $keyLine = "LIG_PDF_PASSWORD_KEY=$([Convert]::ToBase64String($keyBytes))"
+    if ($pdfKeyIndex -ge 0) { $secretLines[$pdfKeyIndex] = $keyLine } else { $secretLines += $keyLine }
+    [IO.File]::WriteAllLines($secretFile, $secretLines, [Text.UTF8Encoding]::new($false))
+    Write-Host "Generated the local PDF password encryption key."
+}
 $logDirectory = Join-Path $PSScriptRoot "ragflow-logs"
 if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
     New-Item -ItemType Directory -Path $logDirectory | Out-Null

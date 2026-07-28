@@ -12,6 +12,7 @@ services:
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
       RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      LIG_PDF_PASSWORD_KEY: ${LIG_PDF_PASSWORD_KEY:?Set LIG_PDF_PASSWORD_KEY in LIG-Deployment/.env.secret}
       PADDLEOCR_BASE_URL: http://paddleocr:8080
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
       PADDLEOCR_ALGORITHM: PP-OCRv5
@@ -43,6 +44,7 @@ services:
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
       RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      LIG_PDF_PASSWORD_KEY: ${LIG_PDF_PASSWORD_KEY:?Set LIG_PDF_PASSWORD_KEY in LIG-Deployment/.env.secret}
       PADDLEOCR_BASE_URL: http://paddleocr:8080
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:-lig-paddleocr-internal}
       PADDLEOCR_ALGORITHM: PP-OCRv5
