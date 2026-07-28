@@ -41,15 +41,35 @@ def encrypted_pdf(user_password: str, owner_password: str | None = None, algorit
     return output.getvalue()
 
 
-def encrypted_office_zip(password: str) -> bytes:
+def encrypted_office_zip(password: str, extension: str = "docx") -> bytes:
     pytest.importorskip("msoffcrypto")
-    pytest.importorskip("docx")
-    from docx import Document
     from msoffcrypto.format.ooxml import OOXMLFile
-    document = Document()
-    document.add_paragraph("RAG-LIG Office test")
+
     plain = io.BytesIO()
-    document.save(plain)
+    if extension == "docx":
+        pytest.importorskip("docx")
+        from docx import Document
+
+        document = Document()
+        document.add_paragraph("RAG-LIG Word test")
+        document.save(plain)
+    elif extension == "xlsx":
+        pytest.importorskip("openpyxl")
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        workbook.active["A1"] = "RAG-LIG Excel test"
+        workbook.save(plain)
+    elif extension == "pptx":
+        pytest.importorskip("pptx")
+        from pptx import Presentation
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+        slide.shapes.title.text = "RAG-LIG PowerPoint test"
+        presentation.save(plain)
+    else:
+        raise AssertionError(f"unsupported test extension: {extension}")
     encrypted = io.BytesIO()
     OOXMLFile(io.BytesIO(plain.getvalue())).encrypt(password, encrypted)
     return encrypted.getvalue()
@@ -141,12 +161,19 @@ def test_pdf_wrong_missing_and_permissions_only_passwords():
 
 @pytest.mark.parametrize("extension", ["docx", "xlsx", "pptx"])
 def test_modern_office_password_decryption(extension):
-    encrypted = encrypted_office_zip("office-password")
+    encrypted = encrypted_office_zip("office-password", extension)
     name, plaintext, parser_config = prepare_document_for_parsing(
         f"secure.{extension}", encrypted, secured(f"secure.{extension}", "office-password")
     )
     assert name == f"secure.{extension}"
     assert plaintext.startswith(b"PK")
+    expected_part = {
+        "docx": "word/document.xml",
+        "xlsx": "xl/workbook.xml",
+        "pptx": "ppt/presentation.xml",
+    }[extension]
+    with ZipFile(io.BytesIO(plaintext)) as archive:
+        assert expected_part in archive.namelist()
     assert PASSWORD_STORAGE_FIELD not in parser_config
 
 
