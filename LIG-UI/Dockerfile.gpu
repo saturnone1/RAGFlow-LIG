@@ -1,0 +1,55 @@
+ARG RAGFLOW_UI_IMAGE=lig/ragflow-ui:v0.26.4-1
+FROM ${RAGFLOW_UI_IMAGE}
+
+USER root
+
+# ONNX Runtime 1.23.2 uses CUDA 12.8 and cuDNN 9. Keep every NVIDIA wheel
+# pinned so the air-gap image is reproducible and does not drift with PyPI.
+RUN uv pip install --python /ragflow/.venv/bin/python --no-cache \
+        nvidia-cuda-nvrtc-cu12==12.8.93 \
+        nvidia-cuda-runtime-cu12==12.8.90 \
+        nvidia-cublas-cu12==12.8.4.1 \
+        nvidia-cudnn-cu12==9.8.0.87 \
+        nvidia-cufft-cu12==11.3.3.83 \
+        nvidia-curand-cu12==10.3.9.90 \
+        nvidia-nvjitlink-cu12==12.8.93
+
+# NVIDIA wheels install shared libraries below site-packages, outside the
+# system loader's default search path. Register every component directory so
+# all RAGFlow processes can create CUDA sessions without application shims.
+RUN /ragflow/.venv/bin/python - <<'PY'
+from pathlib import Path
+import site
+
+library_directories = sorted({
+    str(path)
+    for root in site.getsitepackages()
+    for path in (Path(root) / "nvidia").glob("*/lib")
+    if path.is_dir()
+})
+if not library_directories:
+    raise RuntimeError("NVIDIA CUDA library directories were not installed")
+Path("/etc/ld.so.conf.d/lig-nvidia-cuda.conf").write_text(
+    "\n".join(library_directories) + "\n",
+    encoding="utf-8",
+)
+print("\n".join(library_directories))
+PY
+
+RUN ldconfig && /ragflow/.venv/bin/python - <<'PY'
+import ctypes
+import onnxruntime as ort
+
+for library in (
+    "libcudart.so.12",
+    "libcublas.so.12",
+    "libcublasLt.so.12",
+    "libcufft.so.11",
+    "libcurand.so.10",
+    "libcudnn.so.9",
+):
+    ctypes.CDLL(library)
+if "CUDAExecutionProvider" not in ort.get_available_providers():
+    raise RuntimeError(f"CUDAExecutionProvider is unavailable: {ort.get_available_providers()}")
+print("CUDA runtime libraries and ONNX Runtime CUDA provider are available")
+PY

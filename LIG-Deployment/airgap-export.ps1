@@ -64,8 +64,10 @@ foreach ($bundleFile in $bundleFiles) {
 
 $images = @(
     "lig/ragflow-ui:v0.26.4-1",
+    "lig/ragflow-ui-gpu:v0.26.4-1",
     "lig/ragflow-mcp:v0.26.4-1",
     "lig/paddleocr-ko:v0.26.4-1",
+    "lig/paddleocr-ko-gpu:v0.26.4-1",
     "infiniflow/ragflow:v0.26.4",
     "infiniflow/infinity:v0.7.0",
     "mysql:8.0.39",
@@ -196,11 +198,13 @@ $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Ob
     [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = $hash.Hash.ToLowerInvariant() }
 }
 $manifest = [pscustomobject]@{
-    bundleFormat = 6
+    bundleFormat = 7
     ragflowVersion = "v0.26.4"
     uiImage = "lig/ragflow-ui:v0.26.4-1"
+    gpuUiImage = "lig/ragflow-ui-gpu:v0.26.4-1"
     mcpImage = "lig/ragflow-mcp:v0.26.4-1"
     ocrImage = "lig/paddleocr-ko:v0.26.4-1"
+    gpuOcrImage = "lig/paddleocr-ko-gpu:v0.26.4-1"
     images = @($images)
     imageIds = $imageIds
     embeddingImages = @($embeddingImages)

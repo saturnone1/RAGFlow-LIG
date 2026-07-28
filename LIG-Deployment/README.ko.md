@@ -6,6 +6,7 @@
 
 - 문서 엔진: Elasticsearch 대신 Infinity
 - 실행 장치: 로컬 기본 CPU, 에어갭 번들은 NVIDIA DeepDoc GPU 설치도 지원
+- GPU 런타임: CPU 이미지와 분리한 CUDA 12.8·cuDNN 9 전용 RAGFlow/PaddleOCR 이미지
 - 한국어 OCR: CPU/GPU 프로필에 `korean_PP-OCRv5_mobile_rec` 모델을 포함한 내부 PaddleOCR 서비스 자동 실행
 - 내부 서비스: RAGFlow, 한국어 PaddleOCR, LIG 관리 MCP, Infinity, MySQL, MinIO, Valkey
 - 온라인 임베딩 선택지: NVIDIA 공개 API의 `nvidia/llama-nemotron-embed-vl-1b-v2`
@@ -59,6 +60,12 @@ Copy-Item .env.secret.example .env.secret
 .\lig-ragflow.ps1 pull
 .\lig-ragflow.ps1 build
 .\lig-ragflow.ps1 start
+```
+
+NVIDIA GPU 실행 이미지는 CPU 이미지 위에 고정된 CUDA 12.8·cuDNN 9 라이브러리를 추가합니다. GPU 장비 또는 CPU/GPU 에어갭 번들을 만들 PC에서는 기본 빌드 후 다음 명령도 실행합니다.
+
+```powershell
+.\lig-ragflow.ps1 gpu-build
 ```
 
 RAGFlow UI에서 **설정 → 모델 공급자 → NVIDIA**를 열어 다음 임베딩 모델을 등록하고 기본 Embedding 모델로 지정합니다.
@@ -158,9 +165,9 @@ Windows의 Docker VHDX는 내부 데이터를 지워도 파일 크기가 즉시 
 
 RAGFlow 기본 이미지는 임베딩 모델을 포함하지 않습니다. 이 배포는 Apache-2.0의 `Qwen/Qwen3-Embedding-0.6B`를 커밋 `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`으로 고정하고 TEI `cpu-1.9` 이미지에 포함합니다. 모델은 100개 이상 언어와 1024차원 벡터를 지원합니다. 운영 설정은 RAGFlow 청크 처리에 맞춰 요청당 최대 2,048 토큰으로 자동 절단하며, 검색 질의에만 Qwen 권장 instruction을 붙이고 문서 청크는 원문 그대로 임베딩합니다.
 
-에어갭 반입 폴더에는 기본 런타임 아카이브와 선택형 Qwen3 임베딩 아카이브가 각각 gzip으로 들어갑니다. `install.ps1`과 `install-gpu.ps1`은 기본 런타임만 로드하며, 사용자가 `install-embedding-cpu.ps1`을 추가 실행할 때만 Qwen3 아카이브를 로드하고 서비스를 시작합니다.
+에어갭 반입 폴더에는 CPU 이미지와 CUDA 12.8 GPU 이미지를 함께 담은 기본 런타임 아카이브와 선택형 Qwen3 임베딩 아카이브가 각각 gzip으로 들어갑니다. `install.ps1`과 `install-gpu.ps1`은 기본 런타임을 로드하되 각 프로필에 맞는 이미지만 실행하며, 사용자가 `install-embedding-cpu.ps1`을 추가 실행할 때만 Qwen3 아카이브를 로드하고 서비스를 시작합니다.
 
-온라인 PC에서 반입 묶음을 만드는 명령은 다음과 같습니다. 결과 폴더에는 커스텀 UI와 LIG 관리 MCP를 포함한 고정 버전 이미지, 공식 Compose 런타임, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
+온라인 PC에서 먼저 `build`, `gpu-build`, `embedding-build`를 완료한 뒤 반입 묶음을 만듭니다. 결과 폴더에는 CPU/GPU 커스텀 UI와 PaddleOCR, LIG 관리 MCP를 포함한 고정 버전 이미지, 공식 Compose 런타임, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
 내보내기 대상은 기존 파일이나 비밀값이 섞이지 않은 빈 폴더여야 합니다.
 
 ```powershell

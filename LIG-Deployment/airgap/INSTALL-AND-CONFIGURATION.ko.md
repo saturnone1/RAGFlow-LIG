@@ -35,14 +35,14 @@ cd D:\LIG-RAGFlow-Airgap-20260728
 설치 프로그램은 다음 작업을 자동 수행합니다.
 
 1. manifest와 모든 파일의 SHA-256 검증
-2. gzip Docker 이미지 아카이브 로드
+2. CPU 및 CUDA 12.8 GPU Docker 이미지가 포함된 gzip 아카이브 로드
 3. `.env.secret` 예제 생성
 4. 로그와 MCP 파일 교환 폴더 생성
 5. RAGFlow, 한국어 PaddleOCR, Infinity, MySQL, MinIO, Valkey, 공식 MCP, LIG 관리 MCP 시작
 
-`install-gpu.ps1`은 이미지 로드 후 임시 컨테이너에서 GPU 이름과 VRAM, DeepDOC 및 PaddleOCR의 CUDAExecutionProvider를 검증합니다. 검증 실패 시 CPU 모드로 조용히 대체하지 않고 설치를 중단합니다.
+`install-gpu.ps1`은 CPU 이미지와 분리된 CUDA 12.8·cuDNN 9 GPU 이미지를 사용합니다. 이미지 로드 후 임시 컨테이너에서 GPU 이름과 VRAM, `libcublasLt.so.12` 로딩, DeepDOC와 실제 한국어 PaddleOCR 모델의 CUDA 세션 생성을 검증합니다. 검증 실패 시 CPU 모드로 대체하지 않고 설치를 중단합니다.
 
-CPU와 GPU 설치 모두 한국어 PP-OCRv5 모델이 포함된 PaddleOCR 서비스를 시작합니다. CPU 설치는 CPUExecutionProvider, GPU 설치는 CUDAExecutionProvider를 사용하며 폐쇄망에서 모델을 추가 다운로드하지 않습니다.
+CPU와 GPU 설치 모두 한국어 PP-OCRv5 모델이 포함된 PaddleOCR 서비스를 시작합니다. CPU 설치는 CPU 전용 이미지의 CPUExecutionProvider, GPU 설치는 CUDA 런타임을 포함한 GPU 전용 이미지의 CUDAExecutionProvider를 사용하며 폐쇄망에서 모델을 추가 다운로드하지 않습니다.
 
 완료 후 `http://127.0.0.1:42300`에 접속합니다. 최초 관리자 계정을 만든 뒤 로그인합니다.
 
@@ -234,7 +234,7 @@ GPU 설치 스크립트는 12 GiB VRAM에서 DeepDoc 모델이 작업 실행기�
 
 새 번들은 기존 폴더 위에 덮어쓰지 말고 별도 폴더에 설치 설명서와 manifest를 함께 보관합니다. 데이터 이전 및 호환성을 확인한 후 전환합니다.
 
-커스텀 UI 문제 시 `LIG-Deployment\.env.lig`의 `RAGFLOW_IMAGE`를 다음 공식 이미지로 바꾸고 재시작하면 UI를 롤백할 수 있습니다.
+CPU 커스텀 UI 문제 시 `LIG-Deployment\.env.lig`의 `RAGFLOW_IMAGE`를 다음 공식 이미지로 바꾸고 재시작하면 UI를 롤백할 수 있습니다. GPU 프로필에는 CUDA 라이브러리를 포함한 `RAGFLOW_GPU_IMAGE`를 유지해야 합니다.
 
 ```dotenv
 RAGFLOW_IMAGE=infiniflow/ragflow:v0.26.4

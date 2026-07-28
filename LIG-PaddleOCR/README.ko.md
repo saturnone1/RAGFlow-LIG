@@ -5,7 +5,7 @@ RAGFlow가 기대하는 `/api/v2/ocr/jobs` 계약을 제공하는 내부 OCR 서
 - 인식: 공식 `korean_PP-OCRv5_mobile_rec` 계열 모델
 - 검출: PP-OCRv5 mobile detection
 - 런타임: RapidOCR 3.8.1 + ONNX Runtime
-- 장치: 동일 이미지에서 CPU 또는 NVIDIA CUDA 선택
+- 장치: CPU 이미지와 CUDA 12.8·cuDNN 9 GPU 이미지 분리
 - 네트워크: Compose 내부에서만 RAGFlow가 호출하며 외부 포트는 localhost에만 게시
 
 모델은 이미지 빌드 시 내려받아 포함되므로 실행 시 인터넷이 필요하지 않습니다. RAGFlow 원본 소스는 수정하지 않습니다.

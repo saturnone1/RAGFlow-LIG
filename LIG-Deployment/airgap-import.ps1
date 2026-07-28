@@ -14,11 +14,14 @@ $manifestPath = Join-Path $sourcePath "manifest.json"
 foreach ($file in @($imageArchive, $manifestPath)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required archive not found: $file" } }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 6) {
+if ($manifest.bundleFormat -ne 7) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
 if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-1") {
     throw "Unsupported or missing UI image in manifest: $($manifest.uiImage)"
+}
+if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-1") {
+    throw "Unsupported or missing GPU UI image in manifest: $($manifest.gpuUiImage)"
 }
 if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-1") {
     throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
@@ -26,7 +29,10 @@ if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-1") {
 if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-1") {
     throw "Unsupported or missing Korean OCR image in manifest: $($manifest.ocrImage)"
 }
-foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
+if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-1") {
+    throw "Unsupported or missing GPU Korean OCR image in manifest: $($manifest.gpuOcrImage)"
+}
+foreach ($requiredImage in @($manifest.uiImage, $manifest.gpuUiImage, $manifest.mcpImage, $manifest.ocrImage, $manifest.gpuOcrImage)) {
     if ($requiredImage -notin @($manifest.images)) { throw "Required image is absent from manifest images: $requiredImage" }
 }
 if ($manifest.embeddingModel -ne "Qwen/Qwen3-Embedding-0.6B") {
@@ -58,10 +64,14 @@ docker load --input $imageArchive
 if ($LASTEXITCODE -ne 0) { throw "docker load failed" }
 docker image inspect $manifest.uiImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Custom UI image was not loaded: $($manifest.uiImage)" }
+docker image inspect $manifest.gpuUiImage *> $null
+if ($LASTEXITCODE -ne 0) { throw "GPU UI image was not loaded: $($manifest.gpuUiImage)" }
 docker image inspect $manifest.mcpImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Management MCP image was not loaded: $($manifest.mcpImage)" }
 docker image inspect $manifest.ocrImage *> $null
 if ($LASTEXITCODE -ne 0) { throw "Korean PaddleOCR image was not loaded: $($manifest.ocrImage)" }
+docker image inspect $manifest.gpuOcrImage *> $null
+if ($LASTEXITCODE -ne 0) { throw "GPU Korean PaddleOCR image was not loaded: $($manifest.gpuOcrImage)" }
 if (-not $manifest.imageIds) { throw "Manifest image IDs are missing." }
 foreach ($image in @($manifest.images)) {
     $expectedIdProperty = $manifest.imageIds.PSObject.Properties[[string]$image]
@@ -74,15 +84,15 @@ foreach ($image in @($manifest.images)) {
 
 if ($Device -eq "gpu") {
     Write-Host "Validating NVIDIA GPU access from the RAGFlow image..."
-    docker run --rm --gpus all --entrypoint nvidia-smi $manifest.uiImage --query-gpu=name,memory.total,driver_version --format=csv,noheader
+    docker run --rm --gpus all --entrypoint nvidia-smi $manifest.gpuUiImage --query-gpu=name,memory.total,driver_version --format=csv,noheader
     if ($LASTEXITCODE -ne 0) {
         throw "NVIDIA GPU validation failed. Install a supported NVIDIA driver and NVIDIA Container Toolkit, enable GPU access in Docker Desktop, and retry."
     }
-    docker run --rm --gpus all --entrypoint python3 $manifest.uiImage -c "import onnxruntime as ort; session=ort.InferenceSession('/ragflow/rag/res/deepdoc/layout.onnx', providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'DeepDoc CUDA provider unavailable: {providers}'; print('DeepDoc ONNX provider:', providers[0])"
+    docker run --rm --gpus all --entrypoint /ragflow/.venv/bin/python $manifest.gpuUiImage -c "import ctypes; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; session=ort.InferenceSession('/ragflow/rag/res/deepdoc/layout.onnx', providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'DeepDoc CUDA provider unavailable: {providers}'; print('DeepDoc ONNX provider:', providers[0])"
     if ($LASTEXITCODE -ne 0) {
         throw "The GPU is visible, but DeepDoc could not create a CUDA ONNX session. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }
-    docker run --rm --gpus all --entrypoint /ragflow/.venv/bin/python $manifest.ocrImage -c "from pathlib import Path; import onnxruntime as ort; providers=ort.get_available_providers(); assert 'CUDAExecutionProvider' in providers, f'PaddleOCR CUDA provider unavailable: {providers}'; assert Path('/dev/nvidiactl').exists(), 'NVIDIA device is unavailable'; print('PaddleOCR ONNX provider: CUDAExecutionProvider')"
+    docker run --rm --gpus all --entrypoint /ragflow/.venv/bin/python $manifest.gpuOcrImage -c "from pathlib import Path; import ctypes, rapidocr; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; assert Path('/dev/nvidiactl').exists(), 'NVIDIA device is unavailable'; model=Path(rapidocr.__file__).resolve().parent/'models'/'korean_PP-OCRv5_rec_mobile.onnx'; session=ort.InferenceSession(str(model), providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'PaddleOCR CUDA provider unavailable: {providers}'; print('PaddleOCR ONNX provider:', providers[0])"
     if ($LASTEXITCODE -ne 0) {
         throw "The GPU is visible, but the PaddleOCR image cannot use CUDAExecutionProvider. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }

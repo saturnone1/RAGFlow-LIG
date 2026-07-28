@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("config", "pull", "build", "ui-build", "mcp-build", "ocr-build", "embedding-build", "embedding-start", "embedding-stop", "embedding-status", "embedding-test", "start", "stop", "status", "diagnostics", "logs")]
+    [ValidateSet("config", "pull", "build", "gpu-build", "ui-build", "mcp-build", "ocr-build", "embedding-build", "embedding-start", "embedding-stop", "embedding-status", "embedding-test", "start", "stop", "status", "diagnostics", "logs")]
     [string]$Action = "status"
 )
 
@@ -13,6 +13,7 @@ $secretFile = Join-Path $deploymentDirectory ".env.secret"
 $logDirectory = Join-Path $deploymentDirectory "ragflow-logs"
 $mcpDataDirectory = Join-Path $deploymentDirectory "mcp-files"
 $uiDockerfile = Join-Path $workspaceDirectory "LIG-UI\Dockerfile"
+$gpuUiDockerfile = Join-Path $workspaceDirectory "LIG-UI\Dockerfile.gpu"
 $mcpDirectory = Join-Path $workspaceDirectory "RAGFlow-MCP-LIG"
 $mcpDockerfile = Join-Path $mcpDirectory "Dockerfile"
 $ocrDirectory = Join-Path $workspaceDirectory "LIG-PaddleOCR"
@@ -46,9 +47,22 @@ $composeArguments += @(
 )
 
 function Invoke-Compose([string[]]$Arguments) {
-    & docker @composeArguments @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker compose failed with exit code $LASTEXITCODE"
+    $dockerExecutable = (Get-Command docker -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $previousErrorActionPreference = $ErrorActionPreference
+    $dockerExitCode = 1
+    try {
+        # Windows PowerShell 5.1 turns redirected native stderr into
+        # NativeCommandError records. Compose writes progress to stderr even
+        # when it succeeds, so keep the text visible and trust its exit code.
+        $ErrorActionPreference = "Continue"
+        & $dockerExecutable @composeArguments @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $dockerExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($dockerExitCode -ne 0) {
+        throw "docker compose failed with exit code $dockerExitCode"
     }
 }
 
@@ -237,6 +251,18 @@ switch ($Action) {
         }
         Write-Host "Built lig/paddleocr-ko:v0.26.4-1"
     }
+    "gpu-build" {
+        Assert-FreeSpace
+        & docker build --file $gpuUiDockerfile --tag "lig/ragflow-ui-gpu:v0.26.4-1" $workspaceDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "LIG GPU UI runtime build failed with exit code $LASTEXITCODE"
+        }
+        & docker build --file $ocrDockerfile --build-arg "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-1" --tag "lig/paddleocr-ko-gpu:v0.26.4-1" $ocrDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw "LIG GPU Korean PaddleOCR build failed with exit code $LASTEXITCODE"
+        }
+        Write-Host "Built LIG CUDA 12.8 RAGFlow and Korean PaddleOCR images."
+    }
     "embedding-build" {
         Assert-FreeSpace
         & docker build --file $embeddingModelDockerfile --tag "lig/qwen3-embedding-tei:0.6b-1" $embeddingDirectory
@@ -262,6 +288,22 @@ switch ($Action) {
     "start" {
         Assert-LigConfiguration
         Assert-FreeSpace
+        $configuration = Get-EnvFileValues $ligEnvFile
+        $device = Get-ConfigurationValue $configuration "DEVICE" "cpu"
+        if ($device -eq "gpu") {
+            foreach ($image in @(
+                (Get-ConfigurationValue $configuration "RAGFLOW_GPU_IMAGE"),
+                (Get-ConfigurationValue $configuration "PADDLEOCR_GPU_IMAGE")
+            )) {
+                if ([string]::IsNullOrWhiteSpace($image)) {
+                    throw "GPU image configuration is missing. Set RAGFLOW_GPU_IMAGE and PADDLEOCR_GPU_IMAGE."
+                }
+                & docker image inspect $image *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Required GPU image is missing: $image. Run gpu-build or import the GPU air-gap bundle first."
+                }
+            }
+        }
         & docker image inspect "lig/ragflow-mcp:v0.26.4-1" *> $null
         if ($LASTEXITCODE -ne 0) {
             if (-not (Test-Path -LiteralPath $mcpDockerfile -PathType Leaf)) {

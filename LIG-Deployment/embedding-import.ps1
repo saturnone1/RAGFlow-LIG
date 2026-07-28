@@ -13,7 +13,7 @@ foreach ($path in @($manifestPath, $archivePath)) {
 }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 6) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
+if ($manifest.bundleFormat -ne 7) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
 
 $expectedImages = @(
     "lig/qwen3-embedding-tei:0.6b-1",

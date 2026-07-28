@@ -6,6 +6,7 @@ x-lig-logging: &lig-logging
 
 services:
   ragflow-cpu:
+    image: ${RAGFLOW_IMAGE:?Set RAGFLOW_IMAGE in LIG-Deployment/.env.lig}
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
@@ -36,6 +37,7 @@ services:
         condition: service_healthy
 
   ragflow-gpu:
+    image: ${RAGFLOW_GPU_IMAGE:?Set RAGFLOW_GPU_IMAGE in LIG-Deployment/.env.lig}
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
@@ -95,7 +97,7 @@ services:
   paddleocr-gpu:
     profiles:
       - gpu
-    image: ${PADDLEOCR_IMAGE:?Set PADDLEOCR_IMAGE in LIG-Deployment/.env.lig}
+    image: ${PADDLEOCR_GPU_IMAGE:?Set PADDLEOCR_GPU_IMAGE in LIG-Deployment/.env.lig}
     depends_on:
       mysql:
         condition: service_healthy
