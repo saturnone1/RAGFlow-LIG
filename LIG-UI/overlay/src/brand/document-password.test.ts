@@ -1,10 +1,18 @@
 import {
+  documentPasswordsSchema,
   getUploadFile,
   getUploadFilePasswordKey,
   supportsDocumentPassword,
 } from './document-password';
 
 describe('document upload password identity', () => {
+  it('keeps password fields optional when they were not touched', () => {
+    expect(documentPasswordsSchema.parse(undefined)).toBeUndefined();
+    expect(
+      documentPasswordsSchema.parse({ untouched: undefined, blank: '' }),
+    ).toEqual({ untouched: '', blank: '' });
+  });
+
   it.each(['pdf', 'DOCX', 'xlsx', 'Pptx', 'hwp', 'HWPX'])(
     'recognizes the %s extension',
     (extension) => {

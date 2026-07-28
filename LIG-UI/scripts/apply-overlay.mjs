@@ -307,7 +307,7 @@ write('src/pages/dataset/dataset-setting/saving-button.tsx', content);
 
 content = read('src/components/file-upload-dialog/index.tsx');
 content =
-  "import { getUploadFile, getUploadFilePasswordKey, supportsDocumentPassword } from '@/brand/document-password';\n" +
+  "import { documentPasswordsSchema, getUploadFile, getUploadFilePasswordKey, supportsDocumentPassword } from '@/brand/document-password';\n" +
   content;
 content = replaceOnce(
   content,
@@ -318,7 +318,7 @@ content = replaceOnce(
 content = replaceOnce(
   content,
   "    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
-  "    documentPasswords: z.record(z.string().max(1024)).optional(),\n    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
+  "    documentPasswords: documentPasswordsSchema,\n    tableColumnMode: z.enum(['auto', 'manual']).optional(),",
   'document password upload schema',
 );
 content = replaceOnce(

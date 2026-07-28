@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export type UploadFileValue =
   | File
   | {
@@ -16,6 +18,10 @@ const passwordExtensions = new Set([
   'hwp',
   'hwpx',
 ]);
+
+export const documentPasswordsSchema = z
+  .record(z.string().max(1024).default(''))
+  .optional();
 
 export function getUploadFile(value: UploadFileValue): File {
   return value instanceof File ? value : value.file;
