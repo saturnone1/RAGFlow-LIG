@@ -23,8 +23,12 @@ EXPECTED_REFACTORED_TASK_HANDLER_SHA256 = "a0b7b5e1e70c0d21bb35320e83ebc49650d09
 EXPECTED_NAIVE_PARSER_SHA256 = "99a168e1713321f64f3fb8b1834c1f76f549804f540d08002f5b8aa92bc40bcf"
 EXPECTED_PICTURE_PARSER_SHA256 = "2e67f314adb4375d613345d2e6ba19d4079feaf78027b8a713d5c2183d4dc553"
 EXPECTED_REFACTORED_CHUNK_SERVICE_SHA256 = "c2fc8e3da4f88214b08893ca02793a6984db4ce3b38cd30e4631f5c4b45648c2"
+EXPECTED_EMAIL_PARSER_SHA256 = "bb301146d2225e3cf47b32e80b3b6058ca549973ab4903947cf9e2576ca1bcad"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
-NEW_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=60)"
+NEW_TIMEOUT = (
+    'headers={"Content-Type": "application/json"}, '
+    'timeout=float(os.environ.get("HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS", "300")))'
+)
 PADDLEOCR_PROGRESS_REPLACEMENTS = {
     'callback(0.9, f"[PaddleOCR] done, sections: {len(sections)}")':
         'callback(0.78, f"[PaddleOCR] done, sections: {len(sections)}")',
@@ -42,14 +46,14 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 17:
+    if len(sys.argv) != 18:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
             "<document_api_service.py> <file_service.py> <task_service.py> "
             "<pipeline_parser.py> <pdf_chunk_metadata.py> <chunk_api.py> <file_utils.py> "
             "<refactored_chunk_builder.py> <refactored_task_handler.py> <naive.py> "
-            "<picture.py> <refactored_chunk_service.py>"
+            "<picture.py> <refactored_chunk_service.py> <email.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -360,7 +364,7 @@ def main() -> None:
         "import logging\n",
         "import logging\n\n"
         "from lig_runtime.document_compatibility import validate_parser_compatibility\n"
-        "from lig_runtime.document_password import normalize_document_password_for_binary, secure_parser_config\n",
+        "from lig_runtime.document_password import is_encrypted_pdf, normalize_document_password_for_binary, secure_parser_config\n",
         "file service document password import",
     )
     text = replace_once(
@@ -468,7 +472,7 @@ def main() -> None:
         "                file_parser_config = normalize_document_password_for_binary(\n"
         "                    filename, blob, file_parser_config\n"
         "                )\n"
-        "                if filetype == FileType.PDF.value:\n"
+        "                if filetype == FileType.PDF.value and not is_encrypted_pdf(blob):\n"
         "                    blob = read_potential_broken_pdf(blob)\n",
         "validate password-protected document upload",
     )
@@ -612,6 +616,30 @@ def main() -> None:
         "|html|sql|epub|hwp|hwpx)$",
         "HWP and HWPX upload extensions",
     )
+    text = replace_once(
+        text,
+        "    if blob_len == 0:\n"
+        "        return blob\n\n"
+        "    def try_open(data):\n",
+        "    if blob_len == 0:\n"
+        "        return blob\n"
+        "    if blob_len > MAX_BLOB_SIZE_PDF:\n"
+        "        return blob\n\n"
+        "    def try_open(data):\n",
+        "large PDF early repair bypass",
+    )
+    text = replace_once(
+        text,
+        "    if try_open(blob):\n"
+        "        return blob\n\n"
+        "    if blob_len > MAX_BLOB_SIZE_PDF:\n"
+        "        return blob\n\n"
+        "    repaired = repair_pdf_with_ghostscript(blob)\n",
+        "    if try_open(blob):\n"
+        "        return blob\n\n"
+        "    repaired = repair_pdf_with_ghostscript(blob)\n",
+        "remove late large PDF repair bypass",
+    )
     file_utils_target.write_text(text, encoding="utf-8")
 
     refactored_chunk_builder_target = checked_target(
@@ -662,6 +690,17 @@ def main() -> None:
 
     naive_parser_target = checked_target(Path(sys.argv[14]), EXPECTED_NAIVE_PARSER_SHA256, "rag/app/naive.py")
     text = naive_parser_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "        for embed_filename, embed_bytes in embeds:\n"
+        "            try:\n",
+        "        for embed_filename, embed_bytes in embeds:\n"
+        "            if not re.search(r\"\\.(docx|pdf|csv|xlsx?|txt|py|js|java|c|cpp|h|php|go|ts|sh|cs|kt|sql|md|markdown|mdx|json|html?|doc|pptx?)$\", embed_filename, re.IGNORECASE):\n"
+        "                logging.debug(\"Skipping unsupported embedded stream: %s\", embed_filename)\n"
+        "                continue\n"
+        "            try:\n",
+        "skip unsupported embedded streams",
+    )
     text = replace_once(
         text,
         "    sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)\n\n"
@@ -765,7 +804,7 @@ def main() -> None:
         "    if tenant_id:\n"
         "        if not paddleocr_llm_name:\n"
         "            try:\n"
-        '                paddleocr_llm_name = get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR) or ensure_paddleocr_from_env(tenant_id)\n'
+        '                paddleocr_llm_name = ensure_paddleocr_from_env(tenant_id) or get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR)\n'
         "            except Exception as e:  # best-effort fallback\n"
         '                logging.warning(f"fallback to env paddleocr: {e}")\n\n'
         "        if paddleocr_llm_name:\n"
@@ -796,6 +835,12 @@ def main() -> None:
 
     picture_parser_target = checked_target(Path(sys.argv[15]), EXPECTED_PICTURE_PARSER_SHA256, "rag/app/picture.py")
     text = picture_parser_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        '            paddleocr_llm_name = get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR) or ensure_paddleocr_from_env(tenant_id)\n',
+        '            paddleocr_llm_name = ensure_paddleocr_from_env(tenant_id) or get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR)\n',
+        "PaddleOCR image current environment model precedence",
+    )
     text = replace_once(
         text,
         "        # Try PaddleOCR if configured as layout_recognize\n"
@@ -913,6 +958,24 @@ def main() -> None:
         "refactored executor oversized-file failure",
     )
     chunk_service_target.write_text(text, encoding="utf-8")
+
+    email_parser_target = checked_target(Path(sys.argv[17]), EXPECTED_EMAIL_PARSER_SHA256, "rag/app/email.py")
+    text = email_parser_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    parser_config = kwargs.get(\n"
+        "        \"parser_config\",\n"
+        "        {\"chunk_token_num\": 512, \"delimiter\": \"\\n!?。；！？\", \"layout_recognize\": \"DeepDOC\"},\n"
+        "    )\n",
+        "    parser_config = {\n"
+        "        \"chunk_token_num\": 512,\n"
+        "        \"delimiter\": \"\\n!?。；！？\",\n"
+        "        \"layout_recognize\": \"DeepDOC\",\n"
+        "        **(kwargs.get(\"parser_config\") or {}),\n"
+        "    }\n",
+        "email parser defaults",
+    )
+    email_parser_target.write_text(text, encoding="utf-8")
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:

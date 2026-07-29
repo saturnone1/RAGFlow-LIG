@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 UPSTREAM = os.environ.get("EMBEDDING_UPSTREAM_URL", "http://qwen3-embedding-tei:80").rstrip("/")
 PORT = int(os.environ.get("EMBEDDING_ADAPTER_PORT", "8080"))
+UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_UPSTREAM_TIMEOUT_SECONDS", "300"))
 INSTRUCTION = os.environ.get(
     "EMBEDDING_QUERY_INSTRUCTION",
     "Given a user question, retrieve relevant passages from internal company documents that answer the question",
@@ -44,7 +45,7 @@ def _request_upstream(path: str, payload: bytes | None = None, method: str = "GE
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as response:
             return response.status, response.read(), response.headers.get_content_type()
     except urllib.error.HTTPError as error:
         return error.code, error.read(), error.headers.get_content_type()

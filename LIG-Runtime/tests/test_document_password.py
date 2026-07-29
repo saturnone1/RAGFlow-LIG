@@ -24,6 +24,7 @@ from lig_runtime.document_password import (
     PASSWORD_STORAGE_FIELD,
     DocumentPasswordError,
     encrypted_pdf_page_count,
+    is_encrypted_pdf,
     normalize_document_password_for_binary,
     prepare_document_for_parsing,
     preserve_document_password_state,
@@ -182,6 +183,12 @@ def test_document_open_password_is_sealed_and_pdf_is_decrypted():
     assert name == "secure.pdf"
     assert PdfReader(io.BytesIO(plaintext)).is_encrypted is False
     assert PASSWORD_STORAGE_FIELD not in parser_config
+
+
+def test_encrypted_pdf_detection_keeps_protected_files_out_of_repair_path():
+    assert is_encrypted_pdf(encrypted_pdf("open-password")) is True
+    assert is_encrypted_pdf(plain_pdf()) is False
+    assert is_encrypted_pdf(b"not a pdf") is False
 
 
 def test_plain_replacement_discards_submitted_or_stale_password_state():

@@ -242,6 +242,7 @@ services:
     environment:
       EMBEDDING_UPSTREAM_URL: http://qwen3-embedding-tei:80
       EMBEDDING_ADAPTER_PORT: "8080"
+      EMBEDDING_UPSTREAM_TIMEOUT_SECONDS: ${EMBEDDING_UPSTREAM_TIMEOUT_SECONDS:-300}
       EMBEDDING_QUERY_INSTRUCTION: ${QWEN3_QUERY_INSTRUCTION:-Given a user question, retrieve relevant passages from internal company documents that answer the question}
     ports:
       - ${QWEN3_EMBEDDING_PORT:?Set QWEN3_EMBEDDING_PORT in LIG-Deployment/.env.lig}:8080

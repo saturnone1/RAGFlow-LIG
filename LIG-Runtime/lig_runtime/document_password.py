@@ -1008,6 +1008,16 @@ def normalize_document_password_for_binary(filename: str, binary: bytes, parser_
     return _public_parser_config(config)
 
 
+def is_encrypted_pdf(binary: bytes) -> bool:
+    """Report whether a valid PDF declares encryption without opening it."""
+    if not binary.startswith(b"%PDF-"):
+        return False
+    try:
+        return bool(PdfReader(BytesIO(binary), strict=False).is_encrypted)
+    except Exception:  # noqa: BLE001 - malformed PDFs must remain eligible for repair.
+        return False
+
+
 def encrypted_pdf_page_count(filename: str, binary: bytes, parser_config: dict | None) -> int | None:
     """Count encrypted PDF pages before RAGFlow splits work into tasks."""
     reader = _open_encrypted_pdf(filename, binary, parser_config or {})
