@@ -8,6 +8,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-Sha256Hex([string]$Path) {
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $sha256) { $sha256.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+    }
+}
+
 function Invoke-Docker([string[]]$Arguments) {
     $previous = $ErrorActionPreference
     $exitCode = 1
@@ -151,7 +165,7 @@ if ($ExistingImageArchive) {
     if (-not $archiveRecord) { throw "Existing manifest has no Docker image archive record." }
     $archiveItem = Get-Item -LiteralPath $existingArchivePath
     if ($archiveItem.Length -ne [long]$archiveRecord.bytes) { throw "Existing image archive size does not match its manifest." }
-    $archiveHash = (Get-FileHash -LiteralPath $existingArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $archiveHash = Get-Sha256Hex $existingArchivePath
     if ($archiveHash -ne ([string]$archiveRecord.sha256).ToLowerInvariant()) {
         throw "Existing image archive SHA-256 does not match its manifest."
     }
@@ -229,9 +243,8 @@ $destinationPrefix = $destinationPath.TrimEnd('\') + '\'
 $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Object {
     $_.Name -ne "manifest.json"
 } | Sort-Object FullName | ForEach-Object {
-    $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
     $relativePath = $_.FullName.Substring($destinationPrefix.Length).Replace('\', '/')
-    [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = $hash.Hash.ToLowerInvariant() }
+    [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = Get-Sha256Hex $_.FullName }
 }
 $manifest = [pscustomobject]@{
     bundleFormat = 9

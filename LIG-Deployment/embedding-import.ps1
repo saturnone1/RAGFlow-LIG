@@ -5,6 +5,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-Sha256Hex([string]$Path) {
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $sha256) { $sha256.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+    }
+}
+
 function Invoke-Docker([string[]]$Arguments) {
     $previous = $ErrorActionPreference
     $exitCode = 1
@@ -52,7 +66,7 @@ if ((@($manifest.embeddingImages | Sort-Object) -join "`n") -ne (@($expectedImag
 $archiveRecord = $manifest.files | Where-Object { $_.file -eq "lig-qwen3-embedding-images-0.6b.tar.gz" } | Select-Object -First 1
 if (-not $archiveRecord) { throw "Embedding image archive is absent from the manifest." }
 if ((Get-Item -LiteralPath $archivePath).Length -ne [long]$archiveRecord.bytes) { throw "Embedding archive size mismatch." }
-$actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$actualHash = Get-Sha256Hex $archivePath
 if ($actualHash -ne ([string]$archiveRecord.sha256).ToLowerInvariant()) { throw "Embedding archive SHA-256 mismatch." }
 
 Invoke-Docker @("load", "--input", $archivePath)

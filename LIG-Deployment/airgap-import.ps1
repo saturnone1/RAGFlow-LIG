@@ -8,6 +8,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-Sha256Hex([string]$Path) {
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $sha256) { $sha256.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+    }
+}
+
 function Invoke-Docker([string[]]$Arguments) {
     $previous = $ErrorActionPreference
     $exitCode = 1
@@ -69,7 +83,7 @@ foreach ($record in $manifest.files) {
     }
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Manifest file not found: $file" }
     if ((Get-Item -LiteralPath $file).Length -ne [long]$record.bytes) { throw "File size mismatch: $($record.file)" }
-    $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actual = Get-Sha256Hex $file
     if ($actual -ne ([string]$record.sha256).ToLowerInvariant()) { throw "SHA-256 mismatch: $($record.file)" }
 }
 Write-Host "Air-gap archive SHA-256 validation passed."
