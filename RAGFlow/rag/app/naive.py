@@ -118,6 +118,28 @@ def by_deepdoc(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, 
     pdf_parser = pdf_cls() if pdf_cls else Pdf()
     sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
 
+    if not sections and not tables:
+        if callback:
+            callback(0.3, "[DeepDoc] no OCR sections found; trying embedded PDF text.")
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs.pop("layout_recognizer", None)
+        try:
+            plain_sections, plain_tables, plain_parser = by_plaintext(
+                filename=filename,
+                binary=binary,
+                from_page=from_page,
+                to_page=to_page,
+                callback=callback,
+                layout_recognizer="Plain Text",
+                **fallback_kwargs,
+            )
+            if plain_sections or plain_tables:
+                if callback:
+                    callback(0.4, "[DeepDoc] fallback succeeded with embedded PDF text.")
+                return plain_sections, plain_tables, plain_parser
+        except Exception as exc:
+            logging.warning("Embedded PDF text fallback after DeepDoc failed: %s", exc)
+
     tables = vision_figure_parser_pdf_wrapper(
         tbls=tables,
         sections=sections,
@@ -270,6 +292,52 @@ def by_paddleocr(
     tenant_id: str | None = None,
     **kwargs,
 ):
+    def fallback(reason: str):
+        logging.warning("PaddleOCR could not build PDF sections; continuing with fallback parsers: %s", reason)
+        if callback:
+            callback(0.15, f"[PaddleOCR] {reason}; trying embedded PDF text.")
+
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs.pop("layout_recognizer", None)
+        fallback_kwargs.pop("parse_method", None)
+        fallback_kwargs.pop("paddleocr_llm_name", None)
+
+        try:
+            sections, tables, parser = by_plaintext(
+                filename=filename,
+                binary=binary,
+                from_page=from_page,
+                to_page=to_page,
+                callback=callback,
+                layout_recognizer="Plain Text",
+                **fallback_kwargs,
+            )
+            if sections or tables:
+                if callback:
+                    callback(0.3, "[PaddleOCR] fallback succeeded with embedded PDF text.")
+                return sections, tables, parser
+        except Exception as exc:
+            logging.warning("Embedded PDF text fallback failed: %s", exc)
+
+        if callback:
+            callback(0.3, "[PaddleOCR] no embedded text found; continuing with DeepDoc.")
+        try:
+            return by_deepdoc(
+                filename=filename,
+                binary=binary,
+                from_page=from_page,
+                to_page=to_page,
+                lang=lang,
+                callback=callback,
+                pdf_cls=pdf_cls,
+                **fallback_kwargs,
+            )
+        except Exception as exc:
+            logging.warning("DeepDoc fallback after PaddleOCR failed: %s", exc)
+            if callback:
+                callback(0.4, f"[PaddleOCR] all PDF parsers returned no content: {exc}")
+            return [], [], None
+
     pdf_parser = None
     if tenant_id:
         if not paddleocr_llm_name:
@@ -287,18 +355,21 @@ def by_paddleocr(
                     filepath=filename,
                     binary=binary,
                     callback=callback,
+                    from_page=from_page,
+                    to_page=to_page,
                     parse_method=parse_method,
                     **kwargs,
                 )
-                return sections, tables, pdf_parser
+                if sections or tables:
+                    return sections, tables, pdf_parser
+                return fallback("the OCR result contained no text sections")
             except Exception as e:
                 logging.error(f"Failed to parse pdf via LLMBundle PaddleOCR ({paddleocr_llm_name}): {e}")
+                return fallback(f"request failed: {e}")
 
-        return None, None, None
+        return fallback("no PaddleOCR model is configured")
 
-    if callback:
-        callback(-1, "PaddleOCR not found.")
-    return None, None, None
+    return fallback("tenant information is unavailable")
 
 
 def by_somark(

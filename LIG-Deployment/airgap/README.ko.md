@@ -30,7 +30,13 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 .\test-embedding.ps1
 ```
 
-설치 스크립트는 모든 파일의 SHA-256과 Docker 이미지 ID를 검증하고 이미지를 불러온 다음 서비스를 시작합니다. 설치가 끝나면 `http://127.0.0.1:42300`으로 접속합니다. 공식 MCP는 `42303`, LIG 관리 MCP는 `42306`입니다.
+설치 스크립트는 모든 파일의 SHA-256과 Docker 이미지 ID를 검증하고 이미지를 불러온 뒤 `verify-cpu-images.ps1`의 문서 암호·OCR·청킹 기능 검증까지 통과해야 서비스를 시작합니다. 설치가 끝나면 `http://127.0.0.1:42300`으로 접속합니다. 공식 MCP는 `42303`, LIG 관리 MCP는 `42306`입니다.
+
+반입된 CPU 이미지에 문서 암호·OCR·청킹 수정과 한국어 모델이 실제 포함됐는지는 다음 명령으로 별도 검증할 수 있습니다.
+
+```powershell
+.\verify-cpu-images.ps1
+```
 
 ```powershell
 .\start.ps1
@@ -38,6 +44,7 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 .\start-embedding-cpu.ps1
 .\stop-embedding.ps1
 .\test-embedding.ps1
+.\verify-cpu-images.ps1
 .\stop.ps1
 .\status.ps1
 .\diagnostics.ps1
@@ -52,12 +59,12 @@ GPU로 설치한 장비는 재부팅 후 반드시 `start-gpu.ps1`을 사용합�
 ## 한국어 PDF
 
 - 텍스트 선택·복사가 정상: 데이터셋 언어 `Korean`, PDF 파서 `Plain Text`
-- 스캔 또는 글꼴 매핑이 깨짐: 데이터셋 언어 `Korean`, 청킹 `Naive`, PDF 파서 `paddleocr-from-env`. 내부 URL, 토큰과 `PP-OCRv5`는 자동 적용되므로 별도로 입력하지 않습니다.
+- 스캔 또는 글꼴 매핑이 깨짐: 데이터셋 언어 `Korean`, 청킹 `Naive`, PDF 파서 `paddleocr-from-env`. 내부 URL, 토큰과 `PP-OCRv5`는 자동 적용되며, 대형 PDF는 기본 12쪽 범위만 잘라 OCR 서비스에 전송합니다.
 - 영어·중국어 또는 복잡한 표·레이아웃: 기존 `DeepDOC` 유지
 
 PaddleOCR 상태는 `http://127.0.0.1:42316/health`에서 확인합니다. CPU 설치는 ONNX Runtime CPU, GPU 설치는 CUDA를 사용하며 모델은 이미지에 선탑재되어 있습니다.
 
-PDF, Office 및 HWP/HWPX의 파일 열기 비밀번호는 업로드 창에서 파일별로 입력합니다. 최신 Office와 HWPX 암호는 지원하며, 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 배포용 문서와 IRM/FASOO DRM은 처리하지 않습니다. 저장된 비밀번호 복호화에 필요한 `.env.secret`은 DB와 같은 복구 시점으로 별도 암호화 백업하십시오. 전체 확장자 호환표와 키 회전 절차는 상위 `DOCUMENT-COMPATIBILITY.ko.md`를 따릅니다.
+PDF, Office 및 HWP/HWPX의 파일 열기 비밀번호는 업로드 창에서 파일별로 입력합니다. 최신 Office와 HWPX 암호는 지원하며, 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 암호 PDF 로그가 `OCR started`까지 진행됐다면 열기 암호는 이미 통과한 것이며, 소유자 암호가 필요한 권한 제한은 OCR 전에 별도 오류로 표시됩니다. 배포용 문서와 IRM/FASOO DRM은 처리하지 않습니다. 저장된 비밀번호 복호화에 필요한 `.env.secret`은 DB와 같은 복구 시점으로 별도 암호화 백업하십시오. 전체 확장자 호환표와 키 회전 절차는 상위 `DOCUMENT-COMPATIBILITY.ko.md`를 따릅니다.
 
 `stop.ps1`은 컨테이너와 네트워크만 정리하며 데이터 볼륨은 삭제하지 않습니다.
 
@@ -74,11 +81,11 @@ RAGFlow 컨테이너 안에서 접근 가능한 주소여야 하며, 모델명�
 
 ## 구성 내용
 
-- `lig/ragflow-ui:v0.26.4-1` 커스텀 UI 이미지
-- `lig/ragflow-ui-gpu:v0.26.4-1` CUDA 12.8·cuDNN 9 커스텀 UI 이미지(`-IncludeGpu` 번들만)
-- `lig/ragflow-mcp:v0.26.4-1` LIG 관리 MCP 이미지
-- `lig/paddleocr-ko:v0.26.4-1` 한국어 PP-OCRv5 CPU 이미지
-- `lig/paddleocr-ko-gpu:v0.26.4-1` 한국어 PP-OCRv5 CUDA 이미지(`-IncludeGpu` 번들만)
+- `lig/ragflow-ui:v0.26.4-2` 커스텀 UI 이미지
+- `lig/ragflow-ui-gpu:v0.26.4-2` CUDA 12.8·cuDNN 9 커스텀 UI 이미지(`-IncludeGpu` 번들만)
+- `lig/ragflow-mcp:v0.26.4-2` LIG 관리 MCP 이미지
+- `lig/paddleocr-ko:v0.26.4-2` 한국어 PP-OCRv5 CPU 이미지
+- `lig/paddleocr-ko-gpu:v0.26.4-2` 한국어 PP-OCRv5 CUDA 이미지(`-IncludeGpu` 번들만)
 - `lig/qwen3-embedding-tei:0.6b-1` Qwen3 0.6B 모델 내장 TEI CPU 이미지(`-IncludeEmbedding` 번들만)
 - `lig/qwen3-embedding-adapter:0.6b-1` RAGFlow 질의 instruction 어댑터(`-IncludeEmbedding` 번들만)
 - `infiniflow/ragflow:v0.26.4` 롤백 이미지

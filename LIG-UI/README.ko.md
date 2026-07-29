@@ -7,7 +7,7 @@
 저장소 루트에서 실행합니다.
 
 ```powershell
-docker build -f LIG-UI/Dockerfile -t lig/ragflow-ui:v0.26.4-1 .
+docker build -f LIG-UI/Dockerfile -t lig/ragflow-ui:v0.26.4-2 .
 ```
 
 또는 배포 도우미를 사용합니다.

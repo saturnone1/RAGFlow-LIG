@@ -3407,7 +3407,7 @@ func (s *DocumentService) UploadWebDocument(kb *entity.Knowledgebase, tenantID, 
 		taken[n] = true
 	}
 
-	blob, headers, _, err := fetchRemoteFileSafely(url, maxUploadDocSize)
+	blob, headers, _, err := fetchRemoteFileSafely(url, maxUploadDocSize())
 	if err != nil {
 		return nil, common.CodeDataError, err
 	}
@@ -3545,25 +3545,34 @@ func uniqueUploadName(name string, taken map[string]bool) string {
 	}
 }
 
-// maxUploadDocSize bounds a single uploaded file held in memory, mirroring the
-// Python DOC_MAXIMUM_SIZE default (128 MiB; overridable there via MAX_CONTENT_LENGTH).
-const maxUploadDocSize = 128 * 1024 * 1024
+const defaultMaxUploadDocSize int64 = 128 * 1024 * 1024
+
+// maxUploadDocSize returns the same configurable limit used by the Python API
+// and task executor.
+func maxUploadDocSize() int64 {
+	value := strings.TrimSpace(os.Getenv("MAX_CONTENT_LENGTH"))
+	if size, err := strconv.ParseInt(value, 10, 64); err == nil && size > 0 {
+		return size
+	}
+	return defaultMaxUploadDocSize
+}
 
 func readFileHeaderBytes(fh *multipart.FileHeader) ([]byte, error) {
-	if fh.Size > maxUploadDocSize {
-		return nil, fmt.Errorf("file exceeds the maximum allowed size of %d bytes", maxUploadDocSize)
+	maxSize := maxUploadDocSize()
+	if fh.Size > maxSize {
+		return nil, fmt.Errorf("file exceeds the maximum allowed size of %d bytes", maxSize)
 	}
 	src, err := fh.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer src.Close()
-	blob, err := io.ReadAll(io.LimitReader(src, maxUploadDocSize+1))
+	blob, err := io.ReadAll(io.LimitReader(src, maxSize+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(blob) > maxUploadDocSize {
-		return nil, fmt.Errorf("file exceeds the maximum allowed size of %d bytes", maxUploadDocSize)
+	if int64(len(blob)) > maxSize {
+		return nil, fmt.Errorf("file exceeds the maximum allowed size of %d bytes", maxSize)
 	}
 	return blob, nil
 }

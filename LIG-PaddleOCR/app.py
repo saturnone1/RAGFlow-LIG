@@ -32,15 +32,31 @@ if DEVICE == "gpu":
     if not Path("/dev/nvidiactl").exists():
         raise RuntimeError("PADDLEOCR_DEVICE=gpu but no NVIDIA device is available")
 
+MODEL_DIRECTORY = Path(__import__("rapidocr").__file__).resolve().parent / "models"
+DETECTION_MODEL_PATH = MODEL_DIRECTORY / "ch_PP-OCRv5_det_mobile.onnx"
+RECOGNITION_MODEL_PATH = MODEL_DIRECTORY / "korean_PP-OCRv5_rec_mobile.onnx"
+for model_path in (DETECTION_MODEL_PATH, RECOGNITION_MODEL_PATH):
+    if not model_path.is_file():
+        raise RuntimeError(f"required PaddleOCR model is missing: {model_path}")
+
+recognition_metadata = ort.InferenceSession(
+    str(RECOGNITION_MODEL_PATH), providers=["CPUExecutionProvider"]
+).get_modelmeta().custom_metadata_map
+recognition_characters = recognition_metadata.get("character", "")
+if not any("가" <= character <= "힣" for character in recognition_characters):
+    raise RuntimeError("the configured PaddleOCR recognition model has no Korean character metadata")
+
 OCR_PARAMS = {
     "Global.use_cls": False,
     "Global.log_level": os.getenv("PADDLEOCR_LOG_LEVEL", "info"),
     "Det.ocr_version": OCRVersion.PPOCRV5,
     "Det.lang_type": LangDet.CH,
     "Det.model_type": ModelType.MOBILE,
+    "Det.model_path": str(DETECTION_MODEL_PATH),
     "Rec.ocr_version": OCRVersion.PPOCRV5,
     "Rec.lang_type": LangRec.KOREAN,
     "Rec.model_type": ModelType.MOBILE,
+    "Rec.model_path": str(RECOGNITION_MODEL_PATH),
     "EngineConfig.onnxruntime.use_cuda": DEVICE == "gpu",
 }
 
@@ -51,7 +67,7 @@ if RENDER_SCALE <= 0:
 
 JOB_TTL_SECONDS = int(os.getenv("PADDLEOCR_JOB_TTL_SECONDS", "3600"))
 JOB_WORKERS = int(os.getenv("PADDLEOCR_JOB_WORKERS", "1"))
-MAX_UPLOAD_BYTES = int(os.getenv("PADDLEOCR_MAX_UPLOAD_BYTES", str(256 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = int(os.getenv("PADDLEOCR_MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 MAX_PDF_PAGES = int(os.getenv("PADDLEOCR_MAX_PDF_PAGES", "2000"))
 MAX_PENDING_JOBS = int(os.getenv("PADDLEOCR_MAX_PENDING_JOBS", "8"))
 MIN_FREE_BYTES = int(os.getenv("PADDLEOCR_MIN_FREE_BYTES", str(512 * 1024 * 1024)))
@@ -179,8 +195,16 @@ def _validate_page_pixels(width: float, height: float) -> None:
         raise OcrResourceLimitError(f"page exceeds the {MAX_PAGE_PIXELS} pixel OCR limit")
 
 
+def _pdf_render_scale(width: float, height: float) -> float:
+    if width <= 0 or height <= 0:
+        raise OcrResourceLimitError("PDF page dimensions must be positive")
+    return min(RENDER_SCALE, (MAX_PAGE_PIXELS / (width * height)) ** 0.5)
+
+
 def _ocr_image(image: Image.Image) -> dict[str, Any]:
-    result = OCR(np.asarray(image.convert("RGB")), use_cls=False)
+    rgb_image = image.convert("RGB")
+    _validate_page_pixels(*rgb_image.size)
+    result = OCR(np.asarray(rgb_image), use_cls=False)
     texts = list(result.txts) if result.txts is not None else []
     boxes = [_rectangular_box(box) for box in result.boxes] if result.boxes is not None else []
     scores = [float(score) for score in result.scores] if result.scores is not None else []
@@ -210,8 +234,7 @@ def _process_document(source_path: Path, result_path: Path, progress=None) -> in
             try:
                 for page in document:
                     width, height = page.get_size()
-                    _validate_page_pixels(width * RENDER_SCALE, height * RENDER_SCALE)
-                    image = page.render(scale=RENDER_SCALE).to_pil()
+                    image = page.render(scale=_pdf_render_scale(width, height)).to_pil()
                     try:
                         _write_page_result(output, _ocr_image(image))
                         page_count += 1
@@ -346,7 +369,7 @@ async def create_job():
                     return jsonify(error=f"PDF exceeds the {MAX_PDF_PAGES} page OCR limit"), 413
                 for page in document:
                     width, height = page.get_size()
-                    _validate_page_pixels(width * RENDER_SCALE, height * RENDER_SCALE)
+                    _pdf_render_scale(width, height)
             finally:
                 document.close()
         else:

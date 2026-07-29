@@ -75,14 +75,18 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
         )
 
         # Try PaddleOCR if configured as layout_recognize
+        paddleocr_selected = _is_paddleocr_selected(parser_config)
         txt = _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback)
 
-        if not txt:
+        if not txt and not paddleocr_selected:
             # Fallback to local deepdoc OCR
-            bxs = ocr(np.array(img))
-            txt = "\n".join([t[0] for _, t in bxs if t[0]])
+            txt = _try_local_ocr_text(img)
 
-        callback(0.4, "Finish OCR: (%s ...)" % txt[:12])
+        if txt:
+            ocr_engine = "PaddleOCR" if paddleocr_selected else "local DeepDoc OCR"
+            callback(0.4, f"Finish {ocr_engine}: ({txt[:12]} ...)")
+        elif paddleocr_selected:
+            callback(0.4, "PaddleOCR produced no text; continuing with the CV LLM fallback.")
         if (eng and len(txt.split()) > 32) or len(txt) > 32:
             tokenize(doc, txt, eng, language=lang)
             callback(0.8, "OCR results is too long to use CV LLM.")
@@ -101,9 +105,36 @@ def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
             tokenize(doc, txt, eng, language=lang)
             return attach_media_context([doc], 0, image_ctx)
         except Exception as e:
-            callback(prog=-1, msg=str(e))
+            logging.warning("CV LLM image description failed; preserving OCR fallback: %s", e)
+            if not txt and paddleocr_selected:
+                callback(0.6, "CV LLM fallback unavailable; continuing with local DeepDoc OCR.")
+                txt = _try_local_ocr_text(img)
+            if txt:
+                callback(0.8, f"Using OCR text after CV LLM fallback: ({txt[:12]} ...)")
+                tokenize(doc, txt, eng, language=lang)
+            else:
+                callback(0.8, "No OCR text was recognized; creating an image chunk using its file name.")
+                tokenize(doc, filename, eng, language=lang)
+            return attach_media_context([doc], 0, image_ctx)
 
     return []
+
+
+def _try_local_ocr_text(image):
+    try:
+        boxes = ocr(np.array(image))
+        return "\n".join([text[0] for _, text in boxes if text[0]])
+    except Exception:
+        logging.exception("Local DeepDoc image OCR failed; continuing with fallback processing")
+        return ""
+
+
+def _is_paddleocr_selected(parser_config):
+    layout_recognize = parser_config.get("layout_recognize", "")
+    if not layout_recognize:
+        return False
+    layout_recognizer, _ = normalize_layout_recognizer(layout_recognize)
+    return layout_recognizer == "PaddleOCR"
 
 
 def _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback):
@@ -122,6 +153,7 @@ def _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback):
             paddleocr_llm_name = get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR) or ensure_paddleocr_from_env(tenant_id)
 
         if not paddleocr_llm_name:
+            callback(0.2, "PaddleOCR is selected but no model is configured; continuing with fallback processing.")
             return ""
 
         ocr_model_config = get_model_config_from_provider_instance(tenant_id, LLMType.OCR, paddleocr_llm_name)
@@ -129,7 +161,8 @@ def _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback):
         pdf_parser = ocr_model.mdl
 
         if not hasattr(pdf_parser, "parse_image"):
-            logging.warning("[PaddleOCR] parse_image not available, falling back to local OCR")
+            logging.warning("[PaddleOCR] parse_image is unavailable; continuing with fallback processing")
+            callback(0.2, "PaddleOCR image parsing is unavailable; continuing with fallback processing.")
             return ""
 
         callback(0.2, "Using PaddleOCR to parse image...")
@@ -142,7 +175,9 @@ def _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback):
             logging.info(f"[PaddleOCR] image parsed successfully: {len(txt)} chars")
             return txt
     except Exception as e:
-        logging.warning(f"[PaddleOCR] image parsing failed, falling back to local OCR: {e}")
+        logging.exception("[PaddleOCR] image parsing failed")
+        callback(0.2, f"PaddleOCR failed; continuing with fallback processing: {e}")
+        return ""
 
     return ""
 

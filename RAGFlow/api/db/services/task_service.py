@@ -28,6 +28,7 @@ from api.db.db_models import Task, Document, Knowledgebase, Tenant
 from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from common.misc_utils import get_uuid
+from common.parser_config_utils import normalize_layout_recognizer
 from common.time_utils import current_timestamp, get_format_time
 from common.constants import StatusEnum, TaskStatus, MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER
 from deepdoc.parser.excel_parser import RAGFlowExcelParser
@@ -466,11 +467,15 @@ def queue_tasks(doc: dict, bucket: str, name: str, priority: int):
         pages = PdfParser.total_page_number(doc["name"], file_bin)
         if pages is None:
             pages = 0
-        page_size = doc["parser_config"].get("task_page_size") or 12
+        page_size = max(1, int(doc["parser_config"].get("task_page_size") or 12))
         if doc["parser_id"] == "paper":
-            page_size = doc["parser_config"].get("task_page_size") or 22
+            page_size = max(1, int(doc["parser_config"].get("task_page_size") or 22))
         if doc["parser_id"] in ["one", "knowledge_graph"] or doc["parser_config"].get("toc_extraction", False):
             page_size = MAXIMUM_TASK_PAGE_NUMBER
+        layout_recognizer, _ = normalize_layout_recognizer(doc["parser_config"].get("layout_recognize", "DeepDOC"))
+        if layout_recognizer == "PaddleOCR":
+            paddleocr_page_size = max(1, int(os.environ.get("PADDLEOCR_TASK_PAGE_SIZE", "12")))
+            page_size = min(page_size, paddleocr_page_size)
         page_ranges = doc["parser_config"].get("pages") or [(1, MAXIMUM_PAGE_NUMBER)]
         for s, e in page_ranges:
             s -= 1

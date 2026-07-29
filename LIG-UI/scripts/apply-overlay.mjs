@@ -291,20 +291,6 @@ content = replaceOnce(
 );
 write('src/pages/dataset/dataset-setting/form-schema.ts', content);
 
-content = read('src/pages/dataset/dataset-setting/saving-button.tsx');
-content =
-  "import { configurePaddleOcrWholePdf } from '@/brand/paddleocr-task';\n" +
-  content;
-content = replaceOnce(
-  content,
-  `                  parser_config: {
-                    ...values.parser_config,`,
-  `                  parser_config: {
-                    ...configurePaddleOcrWholePdf(values.parser_config),`,
-  'PaddleOCR whole-PDF task configuration',
-);
-write('src/pages/dataset/dataset-setting/saving-button.tsx', content);
-
 content = read('src/components/file-upload-dialog/index.tsx');
 content =
   "import { documentPasswordsSchema, getUploadFile, getUploadFilePasswordKey, supportsDocumentPassword } from '@/brand/document-password';\n" +

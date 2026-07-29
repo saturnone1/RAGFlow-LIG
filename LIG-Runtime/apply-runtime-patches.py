@@ -20,6 +20,9 @@ EXPECTED_CHUNK_API_SHA256 = "f5da126149457c6c256169914c3012bc587be9ac3f2c11beb59
 EXPECTED_FILE_UTILS_SHA256 = "6d4d5fbe0e249b0e491b746b2b6351833a583f8acd21dda2c9099620ab5a294a"
 EXPECTED_REFACTORED_CHUNK_BUILDER_SHA256 = "0d76ff4d212dd1fa3c6be999177c12f9c6ac8579510c7d7807bdf458e6715b04"
 EXPECTED_REFACTORED_TASK_HANDLER_SHA256 = "a0b7b5e1e70c0d21bb35320e83ebc49650d099838958b92399b1c3b10bba6e7d"
+EXPECTED_NAIVE_PARSER_SHA256 = "99a168e1713321f64f3fb8b1834c1f76f549804f540d08002f5b8aa92bc40bcf"
+EXPECTED_PICTURE_PARSER_SHA256 = "2e67f314adb4375d613345d2e6ba19d4079feaf78027b8a713d5c2183d4dc553"
+EXPECTED_REFACTORED_CHUNK_SERVICE_SHA256 = "c2fc8e3da4f88214b08893ca02793a6984db4ce3b38cd30e4631f5c4b45648c2"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
 NEW_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=60)"
 PADDLEOCR_PROGRESS_REPLACEMENTS = {
@@ -39,13 +42,14 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 14:
+    if len(sys.argv) != 17:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
             "<document_api_service.py> <file_service.py> <task_service.py> "
             "<pipeline_parser.py> <pdf_chunk_metadata.py> <chunk_api.py> <file_utils.py> "
-            "<refactored_chunk_builder.py> <refactored_task_handler.py>"
+            "<refactored_chunk_builder.py> <refactored_task_handler.py> <naive.py> "
+            "<picture.py> <refactored_chunk_service.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -82,6 +86,63 @@ def main() -> None:
                 f"{old_progress}"
             )
         text = text.replace(old_progress, new_progress)
+    text = replace_once(
+        text,
+        "from PIL import Image\n",
+        "from PIL import Image\nfrom pypdf import PdfReader, PdfWriter\n",
+        "PaddleOCR PDF page slicing imports",
+    )
+    text = replace_once(
+        text,
+        "        callback: Optional[Callable[[float, str], None]] = None,\n"
+        "        *,\n"
+        '        parse_method: str = "raw",\n',
+        "        callback: Optional[Callable[[float, str], None]] = None,\n"
+        "        *,\n"
+        "        from_page: int = 0,\n"
+        "        to_page: int = MAXIMUM_PAGE_NUMBER,\n"
+        '        parse_method: str = "raw",\n',
+        "PaddleOCR parse page range parameters",
+    )
+    text = replace_once(
+        text,
+        "        data_bytes = self._prepare_file_data(filepath, binary)\n\n"
+        "        # Generate page images for cropping functionality\n",
+        "        data_bytes = self._prepare_file_data(filepath, binary)\n"
+        "        data_bytes = self._slice_pdf_data(data_bytes, from_page, to_page)\n\n"
+        "        # Generate page images for cropping functionality\n",
+        "PaddleOCR task page slicing",
+    )
+    text = replace_once(
+        text,
+        "            self.__images__(input_source, callback=callback)\n",
+        "            self.__images__(input_source, page_from=from_page, page_to=to_page, callback=callback)\n",
+        "PaddleOCR task page images",
+    )
+    text = replace_once(
+        text,
+        "        return source_path.read_bytes()\n\n"
+        "    def _build_payload",
+        "        return source_path.read_bytes()\n\n"
+        "    @staticmethod\n"
+        "    def _slice_pdf_data(data: bytes, from_page: int, to_page: int) -> bytes:\n"
+        "        reader = PdfReader(BytesIO(data), strict=False)\n"
+        "        page_count = len(reader.pages)\n"
+        "        start = max(0, int(from_page))\n"
+        "        stop = min(page_count, max(start, int(to_page)))\n"
+        "        if start >= stop:\n"
+        '            raise ValueError(f"[PaddleOCR] empty PDF page range: {start}..{stop}")\n'
+        "        if start == 0 and stop == page_count:\n"
+        "            return data\n\n"
+        "        writer = PdfWriter()\n"
+        "        for page_number in range(start, stop):\n"
+        "            writer.add_page(reader.pages[page_number])\n"
+        "        output = BytesIO()\n"
+        "        writer.write(output)\n"
+        "        return output.getvalue()\n\n"
+        "    def _build_payload",
+        "PaddleOCR PDF slicing helper",
+    )
     paddleocr_target.write_text(text, encoding="utf-8")
 
     task_executor_target = Path(sys.argv[3])
@@ -97,6 +158,15 @@ def main() -> None:
     if text.count(OLD_EMBEDDING_PROGRESS) != 1:
         raise SystemExit("Expected exactly one embedding progress calculation")
     text = text.replace(OLD_EMBEDDING_PROGRESS, NEW_EMBEDDING_PROGRESS)
+    text = replace_once(
+        text,
+        '        set_progress(task["id"], prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n'
+        '        get_recording_context().record("file_size_exceeded", True)\n'
+        "        return []\n",
+        '        get_recording_context().record("file_size_exceeded", True)\n'
+        '        raise ValueError("File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n',
+        "legacy executor oversized-file failure",
+    )
     text = replace_once(
         text,
         "    # Record chunk configuration for comparison\n",
@@ -146,7 +216,12 @@ def main() -> None:
         "from pathlib import Path\n",
         "from pathlib import Path\n\n"
         "from lig_runtime.document_compatibility import DocumentCompatibilityError, validate_parser_compatibility\n"
-        "from lig_runtime.document_password import DocumentPasswordError, sanitize_document_response, secure_parser_config\n",
+        "from lig_runtime.document_password import (\n"
+        "    DocumentPasswordError,\n"
+        "    normalize_document_password_for_binary,\n"
+        "    sanitize_document_response,\n"
+        "    secure_parser_config,\n"
+        ")\n",
         "document API password import",
     )
     text = replace_once(
@@ -177,7 +252,16 @@ def main() -> None:
         "        parser_config_template_group_touched = _normalize_parser_config_compilation_template_group_ids(req[\"parser_config\"])\n",
         "        req[\"parser_config\"].update(update_doc_req.parser_config.ext)\n"
         "        try:\n"
-        "            req[\"parser_config\"], document_password_changed = secure_parser_config(req[\"parser_config\"], doc.name)\n"
+        "            req[\"parser_config\"], document_password_changed = secure_parser_config(\n"
+        "                req[\"parser_config\"], doc.name\n"
+        "            )\n"
+        "            if document_password_changed:\n"
+        "                bucket, storage_name = File2DocumentService.get_storage_address(doc_id=doc.id)\n"
+        "                binary = await thread_pool_exec(settings.STORAGE_IMPL.get, bucket, storage_name)\n"
+        "                req[\"parser_config\"] = normalize_document_password_for_binary(\n"
+        "                    doc.name, binary, req[\"parser_config\"]\n"
+        "                )\n"
+        "                document_password_changed = req[\"parser_config\"] != old_parser_config\n"
         "        except DocumentPasswordError as exc:\n"
         "            return get_error_data_result(message=str(exc), code=RetCode.ARGUMENT_ERROR)\n"
         "        parser_config_template_group_touched = _normalize_parser_config_compilation_template_group_ids(req[\"parser_config\"])\n",
@@ -240,8 +324,18 @@ def main() -> None:
     text = replace_once(
         text,
         "import logging\n",
-        "import logging\n\nfrom lig_runtime.document_password import sanitize_document_response\n",
+        "import logging\n\n"
+        "from lig_runtime.document_password import preserve_document_password_state, sanitize_document_response\n",
         "document response sanitizer import",
+    )
+    text = replace_once(
+        text,
+        '        req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))\n'
+        '        DocumentService.update_parser_config(doc.id, req["parser_config"])\n',
+        '        req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))\n'
+        '        req["parser_config"] = preserve_document_password_state(doc.parser_config, req["parser_config"])\n'
+        '        DocumentService.update_parser_config(doc.id, req["parser_config"])\n',
+        "preserve document password across chunk-method changes",
     )
     text = replace_once(
         text,
@@ -266,7 +360,7 @@ def main() -> None:
         "import logging\n",
         "import logging\n\n"
         "from lig_runtime.document_compatibility import validate_parser_compatibility\n"
-        "from lig_runtime.document_password import secure_parser_config, validate_document_access\n",
+        "from lig_runtime.document_password import normalize_document_password_for_binary, secure_parser_config\n",
         "file service document password import",
     )
     text = replace_once(
@@ -321,7 +415,9 @@ def main() -> None:
         "                    if not doc.pipeline_id:\n"
         "                        validate_parser_compatibility(doc.name, doc.parser_id)\n"
         "                    blob = file.read()\n"
-        "                    validate_document_access(doc.name, blob, file_parser_config)\n"
+        "                    file_parser_config = normalize_document_password_for_binary(\n"
+        "                        doc.name, blob, file_parser_config\n"
+        "                    )\n"
         "                    # Connector-supplied fingerprint (e.g. xxhash128(S3 ETag))\n",
         "existing document validation before replacement",
     )
@@ -369,7 +465,9 @@ def main() -> None:
         "                parser_id = self.get_parser(filetype, filename, kb.parser_id)\n"
         "                if not kb.pipeline_id:\n"
         "                    validate_parser_compatibility(filename, parser_id)\n"
-        "                validate_document_access(filename, blob, file_parser_config)\n"
+        "                file_parser_config = normalize_document_password_for_binary(\n"
+        "                    filename, blob, file_parser_config\n"
+        "                )\n"
         "                if filetype == FileType.PDF.value:\n"
         "                    blob = read_potential_broken_pdf(blob)\n",
         "validate password-protected document upload",
@@ -392,6 +490,12 @@ def main() -> None:
     text = task_service_target.read_text(encoding="utf-8")
     text = replace_once(
         text,
+        "from common.misc_utils import get_uuid\n",
+        "from common.misc_utils import get_uuid\nfrom common.parser_config_utils import normalize_layout_recognizer\n",
+        "task service layout recognizer import",
+    )
+    text = replace_once(
+        text,
         "        file_bin = settings.STORAGE_IMPL.get(bucket, name)\n"
         "        pages = PdfParser.total_page_number(doc[\"name\"], file_bin)\n",
         "        file_bin = settings.STORAGE_IMPL.get(bucket, name)\n"
@@ -400,6 +504,28 @@ def main() -> None:
         "        if pages is None:\n"
         "            pages = PdfParser.total_page_number(doc[\"name\"], file_bin)\n",
         "encrypted PDF task page count",
+    )
+    text = replace_once(
+        text,
+        '        page_size = doc["parser_config"].get("task_page_size") or 12\n',
+        '        page_size = max(1, int(doc["parser_config"].get("task_page_size") or 12))\n',
+        "PaddleOCR task page size cap",
+    )
+    text = replace_once(
+        text,
+        '        if doc["parser_id"] == "paper":\n'
+        '            page_size = doc["parser_config"].get("task_page_size") or 22\n'
+        '        if doc["parser_id"] in ["one", "knowledge_graph"] or doc["parser_config"].get("toc_extraction", False):\n'
+        '            page_size = MAXIMUM_TASK_PAGE_NUMBER\n',
+        '        if doc["parser_id"] == "paper":\n'
+        '            page_size = max(1, int(doc["parser_config"].get("task_page_size") or 22))\n'
+        '        if doc["parser_id"] in ["one", "knowledge_graph"] or doc["parser_config"].get("toc_extraction", False):\n'
+        '            page_size = MAXIMUM_TASK_PAGE_NUMBER\n'
+        '        layout_recognizer, _ = normalize_layout_recognizer(doc["parser_config"].get("layout_recognize", "DeepDOC"))\n'
+        '        if layout_recognizer == "PaddleOCR":\n'
+        '            paddleocr_page_size = max(1, int(os.environ.get("PADDLEOCR_TASK_PAGE_SIZE", "12")))\n'
+        '            page_size = min(page_size, paddleocr_page_size)\n',
+        "PaddleOCR task page size application",
     )
     text = replace_once(
         text,
@@ -533,6 +659,260 @@ def main() -> None:
         "refactored GraphRAG task log secret redaction",
     )
     refactored_task_handler_target.write_text(text, encoding="utf-8")
+
+    naive_parser_target = checked_target(Path(sys.argv[14]), EXPECTED_NAIVE_PARSER_SHA256, "rag/app/naive.py")
+    text = naive_parser_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)\n\n"
+        "    tables = vision_figure_parser_pdf_wrapper(\n",
+        "    sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)\n\n"
+        "    if not sections and not tables:\n"
+        "        if callback:\n"
+        "            callback(0.3, \"[DeepDoc] no OCR sections found; trying embedded PDF text.\")\n"
+        "        fallback_kwargs = dict(kwargs)\n"
+        "        fallback_kwargs.pop(\"layout_recognizer\", None)\n"
+        "        try:\n"
+        "            plain_sections, plain_tables, plain_parser = by_plaintext(\n"
+        "                filename=filename,\n"
+        "                binary=binary,\n"
+        "                from_page=from_page,\n"
+        "                to_page=to_page,\n"
+        "                callback=callback,\n"
+        "                layout_recognizer=\"Plain Text\",\n"
+        "                **fallback_kwargs,\n"
+        "            )\n"
+        "            if plain_sections or plain_tables:\n"
+        "                if callback:\n"
+        "                    callback(0.4, \"[DeepDoc] fallback succeeded with embedded PDF text.\")\n"
+        "                return plain_sections, plain_tables, plain_parser\n"
+        "        except Exception as exc:\n"
+        "            logging.warning(\"Embedded PDF text fallback after DeepDoc failed: %s\", exc)\n\n"
+        "    tables = vision_figure_parser_pdf_wrapper(\n",
+        "DeepDoc empty-result fallback",
+    )
+    text = replace_once(
+        text,
+        "    pdf_parser = None\n"
+        "    if tenant_id:\n"
+        "        if not paddleocr_llm_name:\n"
+        "            try:\n"
+        '                paddleocr_llm_name = get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR) or ensure_paddleocr_from_env(tenant_id)\n'
+        "            except Exception as e:  # best-effort fallback\n"
+        '                logging.warning(f"fallback to env paddleocr: {e}")\n\n'
+        "        if paddleocr_llm_name:\n"
+        "            try:\n"
+        "                ocr_model_config = get_model_config_from_provider_instance(tenant_id, LLMType.OCR, paddleocr_llm_name)\n"
+        "                ocr_model = LLMBundle(tenant_id=tenant_id, model_config=ocr_model_config, lang=lang)\n"
+        "                pdf_parser = ocr_model.mdl\n"
+        "                sections, tables = pdf_parser.parse_pdf(\n"
+        "                    filepath=filename,\n"
+        "                    binary=binary,\n"
+        "                    callback=callback,\n"
+        "                    parse_method=parse_method,\n"
+        "                    **kwargs,\n"
+        "                )\n"
+        "                return sections, tables, pdf_parser\n"
+        "            except Exception as e:\n"
+        '                logging.error(f"Failed to parse pdf via LLMBundle PaddleOCR ({paddleocr_llm_name}): {e}")\n\n'
+        "        return None, None, None\n\n"
+        "    if callback:\n"
+        '        callback(-1, "PaddleOCR not found.")\n'
+        "    return None, None, None\n",
+        "    def fallback(reason: str):\n"
+        '        logging.warning("PaddleOCR could not build PDF sections; continuing with fallback parsers: %s", reason)\n'
+        "        if callback:\n"
+        '            callback(0.15, f"[PaddleOCR] {reason}; trying embedded PDF text.")\n\n'
+        "        fallback_kwargs = dict(kwargs)\n"
+        '        fallback_kwargs.pop("layout_recognizer", None)\n'
+        '        fallback_kwargs.pop("parse_method", None)\n'
+        '        fallback_kwargs.pop("paddleocr_llm_name", None)\n\n'
+        "        try:\n"
+        "            sections, tables, parser = by_plaintext(\n"
+        "                filename=filename,\n"
+        "                binary=binary,\n"
+        "                from_page=from_page,\n"
+        "                to_page=to_page,\n"
+        "                callback=callback,\n"
+        '                layout_recognizer="Plain Text",\n'
+        "                **fallback_kwargs,\n"
+        "            )\n"
+        "            if sections or tables:\n"
+        "                if callback:\n"
+        '                    callback(0.3, "[PaddleOCR] fallback succeeded with embedded PDF text.")\n'
+        "                return sections, tables, parser\n"
+        "        except Exception as exc:\n"
+        '            logging.warning("Embedded PDF text fallback failed: %s", exc)\n\n'
+        "        if callback:\n"
+        '            callback(0.3, "[PaddleOCR] no embedded text found; continuing with DeepDoc.")\n'
+        "        try:\n"
+        "            return by_deepdoc(\n"
+        "                filename=filename,\n"
+        "                binary=binary,\n"
+        "                from_page=from_page,\n"
+        "                to_page=to_page,\n"
+        "                lang=lang,\n"
+        "                callback=callback,\n"
+        "                pdf_cls=pdf_cls,\n"
+        "                **fallback_kwargs,\n"
+        "            )\n"
+        "        except Exception as exc:\n"
+        '            logging.warning("DeepDoc fallback after PaddleOCR failed: %s", exc)\n'
+        "            if callback:\n"
+        '                callback(0.4, f"[PaddleOCR] all PDF parsers returned no content: {exc}")\n'
+        "            return [], [], None\n\n"
+        "    pdf_parser = None\n"
+        "    if tenant_id:\n"
+        "        if not paddleocr_llm_name:\n"
+        "            try:\n"
+        '                paddleocr_llm_name = get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR) or ensure_paddleocr_from_env(tenant_id)\n'
+        "            except Exception as e:  # best-effort fallback\n"
+        '                logging.warning(f"fallback to env paddleocr: {e}")\n\n'
+        "        if paddleocr_llm_name:\n"
+        "            try:\n"
+        "                ocr_model_config = get_model_config_from_provider_instance(tenant_id, LLMType.OCR, paddleocr_llm_name)\n"
+        "                ocr_model = LLMBundle(tenant_id=tenant_id, model_config=ocr_model_config, lang=lang)\n"
+        "                pdf_parser = ocr_model.mdl\n"
+        "                sections, tables = pdf_parser.parse_pdf(\n"
+        "                    filepath=filename,\n"
+        "                    binary=binary,\n"
+        "                    callback=callback,\n"
+        "                    from_page=from_page,\n"
+        "                    to_page=to_page,\n"
+        "                    parse_method=parse_method,\n"
+        "                    **kwargs,\n"
+        "                )\n"
+        "                if sections or tables:\n"
+        "                    return sections, tables, pdf_parser\n"
+        '                return fallback("the OCR result contained no text sections")\n'
+        "            except Exception as e:\n"
+        '                logging.error(f"Failed to parse pdf via LLMBundle PaddleOCR ({paddleocr_llm_name}): {e}")\n'
+        '                return fallback(f"request failed: {e}")\n\n'
+        '        return fallback("no PaddleOCR model is configured")\n\n'
+        '    return fallback("tenant information is unavailable")\n',
+        "PaddleOCR PDF fallback chain",
+    )
+    naive_parser_target.write_text(text, encoding="utf-8")
+
+    picture_parser_target = checked_target(Path(sys.argv[15]), EXPECTED_PICTURE_PARSER_SHA256, "rag/app/picture.py")
+    text = picture_parser_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "        # Try PaddleOCR if configured as layout_recognize\n"
+        "        txt = _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback)\n\n"
+        "        if not txt:\n",
+        "        # Try PaddleOCR if configured as layout_recognize\n"
+        "        paddleocr_selected = _is_paddleocr_selected(parser_config)\n"
+        "        txt = _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback)\n\n"
+        "        if not txt and not paddleocr_selected:\n",
+        "selected PaddleOCR fallback ownership",
+    )
+    text = replace_once(
+        text,
+        "            # Fallback to local deepdoc OCR\n"
+        "            bxs = ocr(np.array(img))\n"
+        '            txt = "\\n".join([t[0] for _, t in bxs if t[0]])\n',
+        "            # Fallback to local deepdoc OCR\n"
+        "            txt = _try_local_ocr_text(img)\n",
+        "nonblocking local image OCR",
+    )
+    text = replace_once(
+        text,
+        '        callback(0.4, "Finish OCR: (%s ...)" % txt[:12])\n',
+        '        if txt:\n'
+        '            ocr_engine = "PaddleOCR" if paddleocr_selected else "local DeepDoc OCR"\n'
+        '            callback(0.4, f"Finish {ocr_engine}: ({txt[:12]} ...)")\n'
+        '        elif paddleocr_selected:\n'
+        '            callback(0.4, "PaddleOCR produced no text; continuing with the CV LLM fallback.")\n',
+        "accurate image OCR progress",
+    )
+    text = replace_once(
+        text,
+        "\n\ndef _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback):\n",
+        "\n\ndef _is_paddleocr_selected(parser_config):\n"
+        '    layout_recognize = parser_config.get("layout_recognize", "")\n'
+        "    if not layout_recognize:\n"
+        "        return False\n"
+        "    layout_recognizer, _ = normalize_layout_recognizer(layout_recognize)\n"
+        '    return layout_recognizer == "PaddleOCR"\n\n\n'
+        "def _try_paddleocr_image(filename, binary, tenant_id, parser_config, callback):\n",
+        "PaddleOCR selection helper",
+    )
+    text = replace_once(
+        text,
+        "        if not paddleocr_llm_name:\n"
+        '            return ""\n',
+        "        if not paddleocr_llm_name:\n"
+        '            callback(0.2, "PaddleOCR is selected but no model is configured; continuing with fallback processing.")\n'
+        '            return ""\n',
+        "missing PaddleOCR model progress",
+    )
+    text = replace_once(
+        text,
+        '            logging.warning("[PaddleOCR] parse_image not available, falling back to local OCR")\n'
+        '            return ""\n',
+        '            logging.warning("[PaddleOCR] parse_image is unavailable; continuing with fallback processing")\n'
+        '            callback(0.2, "PaddleOCR image parsing is unavailable; continuing with fallback processing.")\n'
+        '            return ""\n',
+        "unavailable PaddleOCR image parser progress",
+    )
+    text = replace_once(
+        text,
+        '        logging.warning(f"[PaddleOCR] image parsing failed, falling back to local OCR: {e}")\n',
+        '        logging.exception("[PaddleOCR] image parsing failed")\n'
+        '        callback(0.2, f"PaddleOCR failed; continuing with fallback processing: {e}")\n'
+        '        return ""\n',
+        "PaddleOCR image failure progress",
+    )
+    text = replace_once(
+        text,
+        "        except Exception as e:\n"
+        "            callback(prog=-1, msg=str(e))\n\n"
+        "    return []\n",
+        "        except Exception as e:\n"
+        '            logging.warning("CV LLM image description failed; preserving OCR fallback: %s", e)\n'
+        "            if not txt and paddleocr_selected:\n"
+        '                callback(0.6, "CV LLM fallback unavailable; continuing with local DeepDoc OCR.")\n'
+        "                txt = _try_local_ocr_text(img)\n"
+        "            if txt:\n"
+        '                callback(0.8, f"Using OCR text after CV LLM fallback: ({txt[:12]} ...)")\n'
+        "                tokenize(doc, txt, eng, language=lang)\n"
+        "            else:\n"
+        '                callback(0.8, "No OCR text was recognized; creating an image chunk using its file name.")\n'
+        "                tokenize(doc, filename, eng, language=lang)\n"
+        "            return attach_media_context([doc], 0, image_ctx)\n\n"
+        "    return []\n",
+        "nonblocking image OCR fallback",
+    )
+    text = replace_once(
+        text,
+        "\n\ndef _is_paddleocr_selected(parser_config):\n",
+        "\n\ndef _try_local_ocr_text(image):\n"
+        "    try:\n"
+        "        boxes = ocr(np.array(image))\n"
+        '        return "\\n".join([text[0] for _, text in boxes if text[0]])\n'
+        "    except Exception:\n"
+        '        logging.exception("Local DeepDoc image OCR failed; continuing with fallback processing")\n'
+        '        return ""\n\n\n'
+        "def _is_paddleocr_selected(parser_config):\n",
+        "local image OCR fallback helper",
+    )
+    picture_parser_target.write_text(text, encoding="utf-8")
+
+    chunk_service_target = checked_target(
+        Path(sys.argv[16]), EXPECTED_REFACTORED_CHUNK_SERVICE_SHA256, "task_executor_refactor/chunk_service.py"
+    )
+    text = chunk_service_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        '            self._progress(prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n'
+        '            self._task_context.recording_context.record("file_size_exceeded", True)\n'
+        "            return []\n",
+        '            self._task_context.recording_context.record("file_size_exceeded", True)\n'
+        '            raise ValueError("File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n',
+        "refactored executor oversized-file failure",
+    )
+    chunk_service_target.write_text(text, encoding="utf-8")
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:

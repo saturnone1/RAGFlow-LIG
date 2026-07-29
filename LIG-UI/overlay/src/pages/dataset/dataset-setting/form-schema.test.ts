@@ -1,8 +1,4 @@
 import { ParseType } from '@/constants/knowledge';
-import {
-  configurePaddleOcrWholePdf,
-  PADDLEOCR_WHOLE_PDF_TASK_PAGE_SIZE,
-} from '@/brand/paddleocr-task';
 import { formSchema } from './form-schema';
 
 describe('dataset settings schema', () => {
@@ -31,22 +27,5 @@ describe('dataset settings schema', () => {
     });
 
     expect(result.success).toBe(true);
-  });
-
-  it('configures a PaddleOCR PDF as one ingestion task', () => {
-    const parserConfig = configurePaddleOcrWholePdf({
-      layout_recognize: 'paddleocr-from-env@paddleocr-from-env@PaddleOCR',
-      task_page_size: 12,
-    });
-
-    expect(parserConfig?.task_page_size).toBe(
-      PADDLEOCR_WHOLE_PDF_TASK_PAGE_SIZE,
-    );
-  });
-
-  it('does not change the task size for other parsers', () => {
-    const parserConfig = { layout_recognize: 'DeepDOC', task_page_size: 12 };
-
-    expect(configurePaddleOcrWholePdf(parserConfig)).toBe(parserConfig);
   });
 });

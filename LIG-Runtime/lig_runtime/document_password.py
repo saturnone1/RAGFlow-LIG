@@ -222,6 +222,10 @@ def _token_uses_active_key(token: object) -> bool:
 def _pop_private_fields(config: dict) -> tuple[object, bool, bool]:
     extension = config.get("ext")
     extension = extension if isinstance(extension, dict) else {}
+    config.pop(PASSWORD_STATUS_FIELD, None)
+    config.pop(LEGACY_STATUS_FIELD, None)
+    extension.pop(PASSWORD_STATUS_FIELD, None)
+    extension.pop(LEGACY_STATUS_FIELD, None)
     supplied = any(field in config or field in extension for field in (PASSWORD_INPUT_FIELD, LEGACY_INPUT_FIELD))
     clear = False
     for field in (PASSWORD_CLEAR_FIELD, LEGACY_CLEAR_FIELD):
@@ -304,6 +308,8 @@ def sanitize_parser_config(parser_config: object) -> object:
             LEGACY_INPUT_FIELD,
             LEGACY_CLEAR_FIELD,
             LEGACY_STORAGE_FIELD,
+            PASSWORD_STATUS_FIELD,
+            LEGACY_STATUS_FIELD,
         ):
             extension.pop(field, None)
     config[PASSWORD_STATUS_FIELD] = configured
@@ -315,6 +321,15 @@ def sanitize_document_response(document: dict) -> dict:
     if "parser_config" in sanitized:
         sanitized["parser_config"] = sanitize_parser_config(sanitized["parser_config"])
     return sanitized
+
+
+def preserve_document_password_state(source: dict | None, target: dict | None) -> dict:
+    """Copy only the sealed document password when replacing parser settings."""
+    preserved = _public_parser_config(deepcopy(target or {}))
+    token = _password_token(source or {})
+    if token:
+        preserved[PASSWORD_STORAGE_FIELD] = token
+    return preserved
 
 
 def _password_token(config: dict) -> object:
@@ -359,8 +374,16 @@ def _prepare_pdf(filename: str, binary: bytes, config: dict) -> bytes:
     reader = _open_encrypted_pdf(filename, binary, config)
     if reader is None:
         return binary
+
+    # Build a clean, unencrypted page tree instead of cloning the encrypted
+    # document catalog.  Some Adobe-generated PDFs retain encryption-related
+    # catalog state when cloned wholesale and downstream renderers then see
+    # the correct page count but no renderable contents.
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
     output = BytesIO()
-    PdfWriter(clone_from=reader).write(output)
+    writer.write(output)
     return output.getvalue()
 
 
@@ -478,7 +501,7 @@ def _decode_manifest_value(element: ElementTree.Element, name: str) -> bytes:
         raise DocumentPasswordError(f"The HWPX encryption manifest has an invalid {name} value.") from exc
 
 
-def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, bytes]:
+def _hwpx_encrypted_entries(archive: ZipFile) -> list[tuple[ElementTree.Element, ElementTree.Element]]:
     try:
         manifest = ElementTree.fromstring(
             _bounded_zip_read(archive, "META-INF/manifest.xml", _MAX_HWPX_MANIFEST_SIZE)
@@ -493,6 +516,16 @@ def _decrypt_hwpx_entries(archive: ZipFile, password: str | None) -> dict[str, b
             encrypted_entries.append((entry, encryption))
     if len(encrypted_entries) > _MAX_HWPX_ENCRYPTED_ENTRIES:
         raise DocumentPasswordError("The HWPX package contains too many encrypted entries.")
+    return encrypted_entries
+
+
+def _decrypt_hwpx_entries(
+    archive: ZipFile,
+    password: str | None,
+    encrypted_entries: list[tuple[ElementTree.Element, ElementTree.Element]] | None = None,
+) -> dict[str, bytes]:
+    if encrypted_entries is None:
+        encrypted_entries = _hwpx_encrypted_entries(archive)
     if not encrypted_entries:
         return {}
     if password is None:
@@ -681,8 +714,9 @@ def _prepare_hwpx(filename: str, binary: bytes, config: dict) -> tuple[str, byte
     try:
         with ZipFile(BytesIO(binary)) as archive:
             _validate_hwpx_archive(archive)
-            password = _unseal(_password_token(config)) if _password_token(config) else None
-            decrypted = _decrypt_hwpx_entries(archive, password)
+            encrypted_entries = _hwpx_encrypted_entries(archive)
+            password = _unseal(_password_token(config)) if encrypted_entries and _password_token(config) else None
+            decrypted = _decrypt_hwpx_entries(archive, password, encrypted_entries)
             return f"{filename}.txt", _extract_hwpx_text(archive, decrypted)
     except BadZipFile as exc:
         raise DocumentPasswordError("The HWPX file is not a valid ZIP document package.") from exc
@@ -876,11 +910,21 @@ def _release_preparation(key: tuple[str, str] | None, event: Event | None) -> No
 
 
 def _public_parser_config(config: dict) -> dict:
-    config.pop(PASSWORD_STORAGE_FIELD, None)
-    config.pop(LEGACY_STORAGE_FIELD, None)
+    private_fields = (
+        PASSWORD_INPUT_FIELD,
+        PASSWORD_CLEAR_FIELD,
+        PASSWORD_STORAGE_FIELD,
+        PASSWORD_STATUS_FIELD,
+        LEGACY_INPUT_FIELD,
+        LEGACY_CLEAR_FIELD,
+        LEGACY_STORAGE_FIELD,
+        LEGACY_STATUS_FIELD,
+    )
+    for field in private_fields:
+        config.pop(field, None)
     extension = config.get("ext")
     if isinstance(extension, dict):
-        for field in (PASSWORD_INPUT_FIELD, PASSWORD_CLEAR_FIELD, LEGACY_INPUT_FIELD, LEGACY_CLEAR_FIELD):
+        for field in private_fields:
             extension.pop(field, None)
     return config
 
@@ -919,17 +963,16 @@ def prepare_document_for_parsing(filename: str, binary: bytes, parser_config: di
         _release_preparation(key, event)
 
 
-def validate_document_access(filename: str, binary: bytes, parser_config: dict | None) -> None:
-    """Fail an upload early when an encrypted or Hancom document cannot be parsed."""
+def validate_document_access(filename: str, binary: bytes, parser_config: dict | None) -> bool:
+    """Validate parser access and report whether the binary uses an opening password."""
     extension = _extension(filename)
     config = parser_config or {}
     if extension == ".pdf":
-        _open_encrypted_pdf(filename, binary, config)
-        return
+        return _open_encrypted_pdf(filename, binary, config) is not None
     if extension in OFFICE_EXTENSIONS:
         office_file = _office_file(binary)
         if office_file is None or not office_file.is_encrypted():
-            return
+            return False
         password = _required_password(filename, config)
         try:
             verified_without_decrypt = _load_office_key(office_file, password)
@@ -939,9 +982,30 @@ def validate_document_access(filename: str, binary: bytes, parser_config: dict |
             raise DocumentPasswordError(
                 "The Office document password is incorrect or its encryption is unsupported."
             ) from exc
-        return
-    if extension in HANCOM_EXTENSIONS:
+        return True
+    if extension == ".hwpx":
+        try:
+            with ZipFile(BytesIO(binary)) as archive:
+                _validate_hwpx_archive(archive)
+                password_protected = bool(_hwpx_encrypted_entries(archive))
+        except BadZipFile as exc:
+            raise DocumentPasswordError("The HWPX file is not a valid ZIP document package.") from exc
         prepare_document_for_parsing(filename, binary, config)
+        return password_protected
+    if extension == ".hwp":
+        ole, _, properties = _read_hwp_header(binary)
+        ole.close()
+        prepare_document_for_parsing(filename, binary, config)
+        return bool(properties & (1 << 1))
+    return False
+
+
+def normalize_document_password_for_binary(filename: str, binary: bytes, parser_config: dict | None) -> dict:
+    """Validate access and discard submitted or stale password state for a plain document."""
+    config = deepcopy(parser_config or {})
+    if validate_document_access(filename, binary, config):
+        return config
+    return _public_parser_config(config)
 
 
 def encrypted_pdf_page_count(filename: str, binary: bytes, parser_config: dict | None) -> int | None:

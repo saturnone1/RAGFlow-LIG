@@ -18,20 +18,20 @@ public sealed class RagFlowClient
     {
         try
         {
-            using var request = CreateRequest(HttpMethod.Get, "api/v1/system/status");
+            // Health checks must not depend on a tenant API key. In a fresh or
+            // air-gapped installation the configured value can still be the
+            // bootstrap placeholder, which makes the authenticated status
+            // endpoint emit JWT warnings even though RAGFlow is ready.
+            using var request = new HttpRequestMessage(HttpMethod.Get, "api/v1/system/ping");
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
             var bytes = await ReadLimitedBytesAsync(response.Content, _settings.MaxTextResponseBytes);
-            var available = response.IsSuccessStatusCode;
-            if (available)
-            {
-                using var document = JsonDocument.Parse(bytes.Length == 0 ? "{}"u8.ToArray() : bytes);
-                available = IsReady(document.RootElement);
-            }
-            return BuildHealth(available, (int)response.StatusCode, available ? null : "RAGFlow readiness check failed.");
+            var available = response.IsSuccessStatusCode
+                && string.Equals(Encoding.UTF8.GetString(bytes).Trim(), "pong", StringComparison.OrdinalIgnoreCase);
+            return BuildHealth(available, (int)response.StatusCode, available ? null : "RAGFlow ping check failed.");
         }
-        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidOperationException)
         {
-            return BuildHealth(false, null, "RAGFlow is unreachable or returned an invalid readiness response.");
+            return BuildHealth(false, null, "RAGFlow is unreachable or returned an invalid ping response.");
         }
     }
 
@@ -46,22 +46,6 @@ public sealed class RagFlowClient
         _settings.MaxTextResponseBytes,
         httpStatus,
         error);
-
-    private static bool IsReady(JsonElement root)
-    {
-        if (!root.TryGetProperty("code", out var code)) return false;
-        var codeIsZero = code.ValueKind == JsonValueKind.Number
-            ? code.TryGetInt32(out var numericCode) && numericCode == 0
-            : code.ValueKind == JsonValueKind.String && int.TryParse(code.GetString(), out numericCode) && numericCode == 0;
-        if (!codeIsZero || !root.TryGetProperty("data", out var data)) return false;
-        foreach (var dependency in new[] { "database", "doc_engine", "redis", "storage" })
-        {
-            if (!data.TryGetProperty(dependency, out var state)
-                || !state.TryGetProperty("status", out var status)
-                || status.GetString() != "green") return false;
-        }
-        return true;
-    }
 
     public Task<JsonElement> GetAsync(string path) => SendAsync(HttpMethod.Get, path);
     public Task<JsonElement> PostAsync(string path, object? body = null) => SendAsync(HttpMethod.Post, path, body);

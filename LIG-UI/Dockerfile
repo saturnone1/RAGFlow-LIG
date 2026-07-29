@@ -52,6 +52,9 @@ RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/api/utils/file_utils.py \
         /ragflow/rag/svr/task_executor_refactor/chunk_builder.py \
         /ragflow/rag/svr/task_executor_refactor/task_handler.py \
+        /ragflow/rag/app/naive.py \
+        /ragflow/rag/app/picture.py \
+        /ragflow/rag/svr/task_executor_refactor/chunk_service.py \
     && rm /tmp/apply-lig-runtime-patches.py
 RUN rm -rf /ragflow/web/dist && mkdir -p /ragflow/web/dist
 COPY --from=web-builder /build/web/dist/ /ragflow/web/dist/

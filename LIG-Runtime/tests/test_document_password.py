@@ -12,6 +12,7 @@ import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 import lig_runtime.document_password as document_password_module
 from lig_runtime.document_key_rotation import audit_configs, keyring_fingerprint
@@ -23,7 +24,9 @@ from lig_runtime.document_password import (
     PASSWORD_STORAGE_FIELD,
     DocumentPasswordError,
     encrypted_pdf_page_count,
+    normalize_document_password_for_binary,
     prepare_document_for_parsing,
+    preserve_document_password_state,
     sanitize_parser_config,
     secure_parser_config,
     validate_document_access,
@@ -47,6 +50,36 @@ def encrypted_pdf(user_password: str, owner_password: str | None = None, algorit
     writer = PdfWriter()
     writer.add_blank_page(width=612, height=792)
     writer.encrypt(user_password, owner_password, algorithm=algorithm)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def plain_pdf() -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def encrypted_text_pdf(user_password: str, owner_password: str | None = None) -> bytes:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    page[NameObject("/Resources")] = DictionaryObject(
+        {NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})}
+    )
+    content = DecodedStreamObject()
+    content.set_data(b"BT /F1 12 Tf 72 720 Td (LIG encrypted PDF content) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    writer.encrypt(user_password, owner_password)
     output = io.BytesIO()
     writer.write(output)
     return output.getvalue()
@@ -151,6 +184,47 @@ def test_document_open_password_is_sealed_and_pdf_is_decrypted():
     assert PASSWORD_STORAGE_FIELD not in parser_config
 
 
+def test_plain_replacement_discards_submitted_or_stale_password_state():
+    config = secured("plain.pdf", "no-longer-needed")
+
+    assert validate_document_access("plain.pdf", plain_pdf(), config) is False
+    normalized = normalize_document_password_for_binary("plain.pdf", plain_pdf(), config)
+
+    assert PASSWORD_STORAGE_FIELD not in normalized
+    assert PASSWORD_STATUS_FIELD not in normalized
+    assert validate_document_access("secure.pdf", encrypted_pdf("needed"), secured("secure.pdf", "needed")) is True
+
+
+def test_chunk_method_change_preserves_only_the_sealed_password_state():
+    source = secured("secure.pdf", "keep-me")
+    source[PASSWORD_STATUS_FIELD] = True
+    target = {
+        "layout_recognize": "PaddleOCR",
+        PASSWORD_INPUT_FIELD: "must-not-survive",
+        PASSWORD_STATUS_FIELD: True,
+    }
+
+    preserved = preserve_document_password_state(source, target)
+
+    assert preserved["layout_recognize"] == "PaddleOCR"
+    assert preserved[PASSWORD_STORAGE_FIELD] == source[PASSWORD_STORAGE_FIELD]
+    assert PASSWORD_INPUT_FIELD not in preserved
+    assert PASSWORD_STATUS_FIELD not in preserved
+
+
+def test_pdf_decryption_rebuild_preserves_page_content_streams():
+    encrypted = encrypted_text_pdf("open-password", "owner-password")
+
+    _, plaintext, _ = prepare_document_for_parsing(
+        "adobe-style.pdf", encrypted, secured("adobe-style.pdf", "open-password")
+    )
+
+    reader = PdfReader(io.BytesIO(plaintext))
+    assert reader.is_encrypted is False
+    assert b"LIG encrypted PDF content" in reader.pages[0].get_contents().get_data()
+    assert "LIG encrypted PDF content" in reader.pages[0].extract_text()
+
+
 @pytest.mark.parametrize("algorithm", ["RC4-128", "AES-128", "AES-256"])
 def test_common_pdf_algorithms(algorithm):
     encrypted = encrypted_pdf("open-password", "owner-password", algorithm)
@@ -211,6 +285,10 @@ def test_encrypted_and_plain_hwpx_are_extracted_to_text():
     assert plain_name == "plain.hwpx.txt"
     assert plain_text.decode() == "암호화 HWPX 본문\n\n두 번째 문단"
 
+    stale_config = {PASSWORD_STORAGE_FIELD: "unreadable-stale-token"}
+    normalized = normalize_document_password_for_binary("plain.hwpx", hwpx_document(None), stale_config)
+    assert PASSWORD_STORAGE_FIELD not in normalized
+
 
 def test_hwpx_wrong_or_missing_password():
     encrypted = hwpx_document("correct")
@@ -258,6 +336,12 @@ def test_password_rejected_for_unrelated_file_type_and_plain_office_is_unchanged
     name, binary, config = prepare_document_for_parsing("plain.docx", plain.getvalue(), {})
     assert name == "plain.docx"
     assert binary == plain.getvalue()
+    assert PASSWORD_STATUS_FIELD not in config
+
+
+def test_public_password_status_is_never_stored_as_parser_state():
+    config, changed = secure_parser_config({PASSWORD_STATUS_FIELD: True}, "plain.pdf")
+    assert changed is False
     assert PASSWORD_STATUS_FIELD not in config
 
 

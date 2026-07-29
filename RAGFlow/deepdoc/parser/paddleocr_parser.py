@@ -30,6 +30,7 @@ import numpy as np
 import pdfplumber
 import requests
 from PIL import Image
+from pypdf import PdfReader, PdfWriter
 
 from common.constants import MAXIMUM_PAGE_NUMBER
 
@@ -259,6 +260,8 @@ class PaddleOCRParser(RAGFlowPdfParser):
         binary: BytesIO | bytes | None = None,
         callback: Optional[Callable[[float, str], None]] = None,
         *,
+        from_page: int = 0,
+        to_page: int = MAXIMUM_PAGE_NUMBER,
         parse_method: str = "raw",
         base_url: Optional[str] = None,
         access_token: Optional[str] = None,
@@ -301,11 +304,12 @@ class PaddleOCRParser(RAGFlowPdfParser):
 
         # Prepare file data and generate page images for cropping
         data_bytes = self._prepare_file_data(filepath, binary)
+        data_bytes = self._slice_pdf_data(data_bytes, from_page, to_page)
 
         # Generate page images for cropping functionality
         input_source = filepath if binary is None else binary
         try:
-            self.__images__(input_source, callback=callback)
+            self.__images__(input_source, page_from=from_page, page_to=to_page, callback=callback)
         except Exception as e:
             self.logger.warning(f"[PaddleOCR] Failed to generate page images for cropping: {e}")
 
@@ -407,6 +411,24 @@ class PaddleOCRParser(RAGFlowPdfParser):
             raise FileNotFoundError(f"[PaddleOCR] file not found: {source_path}")
 
         return source_path.read_bytes()
+
+    @staticmethod
+    def _slice_pdf_data(data: bytes, from_page: int, to_page: int) -> bytes:
+        reader = PdfReader(BytesIO(data), strict=False)
+        page_count = len(reader.pages)
+        start = max(0, int(from_page))
+        stop = min(page_count, max(start, int(to_page)))
+        if start >= stop:
+            raise ValueError(f"[PaddleOCR] empty PDF page range: {start}..{stop}")
+        if start == 0 and stop == page_count:
+            return data
+
+        writer = PdfWriter()
+        for page_number in range(start, stop):
+            writer.add_page(reader.pages[page_number])
+        output = BytesIO()
+        writer.write(output)
+        return output.getvalue()
 
     def _build_payload(self, data: bytes, file_type: int, config: PaddleOCRConfig) -> dict[str, Any]:
         """Build optionalPayload for async Job API request."""

@@ -18,6 +18,19 @@ function Invoke-Docker([string[]]$Arguments) {
     } finally { $ErrorActionPreference = $previous }
     if ($exitCode -ne 0) { throw "docker failed with exit code $exitCode" }
 }
+
+function Invoke-DockerCapture([string[]]$Arguments, [switch]$AllowFailure) {
+    $previous = $ErrorActionPreference
+    $exitCode = 1
+    $output = @()
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& docker @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($exitCode -ne 0 -and -not $AllowFailure) { throw "docker failed with exit code $exitCode" }
+    return [pscustomobject]@{ ExitCode = $exitCode; Lines = $output }
+}
 $sourcePath = [IO.Path]::GetFullPath($Source)
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Container)) { throw "Source directory not found: $sourcePath" }
 $imageArchive = Join-Path $sourcePath "lig-ragflow-images-v0.26.4.tar.gz"
@@ -25,16 +38,16 @@ $manifestPath = Join-Path $sourcePath "manifest.json"
 foreach ($file in @($imageArchive, $manifestPath)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required archive not found: $file" } }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 8) {
+if ($manifest.bundleFormat -ne 9) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
-if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-1") {
+if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-2") {
     throw "Unsupported or missing UI image in manifest: $($manifest.uiImage)"
 }
-if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-1") {
+if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-2") {
     throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
 }
-if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-1") {
+if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-2") {
     throw "Unsupported or missing Korean OCR image in manifest: $($manifest.ocrImage)"
 }
 foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
@@ -42,8 +55,8 @@ foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.oc
 }
 if ($Device -eq "gpu") {
     if (-not $manifest.gpuIncluded) { throw "This bundle does not include GPU images. Export it again with -IncludeGpu." }
-    if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-1") { throw "Unsupported GPU UI image: $($manifest.gpuUiImage)" }
-    if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-1") { throw "Unsupported GPU OCR image: $($manifest.gpuOcrImage)" }
+    if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-2") { throw "Unsupported GPU UI image: $($manifest.gpuUiImage)" }
+    if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-2") { throw "Unsupported GPU OCR image: $($manifest.gpuOcrImage)" }
     foreach ($requiredImage in @($manifest.gpuUiImage, $manifest.gpuOcrImage)) {
         if ($requiredImage -notin @($manifest.images)) { throw "Required GPU image is absent from manifest images: $requiredImage" }
     }
@@ -61,33 +74,44 @@ foreach ($record in $manifest.files) {
 }
 Write-Host "Air-gap archive SHA-256 validation passed."
 
-& docker version *> $null
-if ($LASTEXITCODE -ne 0) { throw "Docker Engine is not available. Start Docker Desktop and try again." }
-& docker compose version *> $null
-if ($LASTEXITCODE -ne 0) { throw "Docker Compose v2 is not available." }
+$dockerVersion = Invoke-DockerCapture -Arguments @("version", "--format", "{{.Server.Version}}") -AllowFailure
+if ($dockerVersion.ExitCode -ne 0) { throw "Docker Engine is not available. Start Docker Desktop and try again." }
+$composeVersion = Invoke-DockerCapture -Arguments @("compose", "version", "--short") -AllowFailure
+if ($composeVersion.ExitCode -ne 0) { throw "Docker Compose v2 is not available." }
 
 Invoke-Docker @("load", "--input", $imageArchive)
-docker image inspect $manifest.uiImage *> $null
-if ($LASTEXITCODE -ne 0) { throw "Custom UI image was not loaded: $($manifest.uiImage)" }
-docker image inspect $manifest.mcpImage *> $null
-if ($LASTEXITCODE -ne 0) { throw "Management MCP image was not loaded: $($manifest.mcpImage)" }
-docker image inspect $manifest.ocrImage *> $null
-if ($LASTEXITCODE -ne 0) { throw "Korean PaddleOCR image was not loaded: $($manifest.ocrImage)" }
+foreach ($loadedImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
+    $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $loadedImage) -AllowFailure
+    if ($inspect.ExitCode -ne 0) { throw "Required image was not loaded: $loadedImage" }
+}
 if ($manifest.gpuIncluded) {
-    docker image inspect $manifest.gpuUiImage *> $null
-    if ($LASTEXITCODE -ne 0) { throw "GPU UI image was not loaded: $($manifest.gpuUiImage)" }
-    docker image inspect $manifest.gpuOcrImage *> $null
-    if ($LASTEXITCODE -ne 0) { throw "GPU Korean PaddleOCR image was not loaded: $($manifest.gpuOcrImage)" }
+    foreach ($loadedImage in @($manifest.gpuUiImage, $manifest.gpuOcrImage)) {
+        $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $loadedImage) -AllowFailure
+        if ($inspect.ExitCode -ne 0) { throw "Required GPU image was not loaded: $loadedImage" }
+    }
 }
 if (-not $manifest.imageIds) { throw "Manifest image IDs are missing." }
 foreach ($image in @($manifest.images)) {
     $expectedIdProperty = $manifest.imageIds.PSObject.Properties[[string]$image]
     if (-not $expectedIdProperty) { throw "Manifest image ID is missing: $image" }
-    $actualId = (& docker image inspect --format '{{.Id}}' $image).Trim()
-    if ($LASTEXITCODE -ne 0 -or $actualId -ne [string]$expectedIdProperty.Value) {
+    $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+    $actualId = ([string]($inspect.Lines | Where-Object { $_ -match '^sha256:[0-9a-fA-F]{64}$' } | Select-Object -Last 1)).Trim()
+    if ($inspect.ExitCode -ne 0 -or $actualId -ne [string]$expectedIdProperty.Value) {
         throw "Loaded image ID does not match the manifest: $image"
     }
 }
+
+$verificationScript = Join-Path $PSScriptRoot "verify-cpu-images.ps1"
+if (-not (Test-Path -LiteralPath $verificationScript -PathType Leaf)) {
+    $verificationScript = Join-Path (Split-Path $PSScriptRoot -Parent) "verify-cpu-images.ps1"
+}
+if (-not (Test-Path -LiteralPath $verificationScript -PathType Leaf)) {
+    throw "CPU image verification script is missing from the bundle."
+}
+& $verificationScript `
+    -RagFlowImage $manifest.uiImage `
+    -PaddleOcrImage $manifest.ocrImage `
+    -McpImage $manifest.mcpImage
 
 if ($Device -eq "gpu") {
     Write-Host "Validating NVIDIA GPU access from the RAGFlow image..."

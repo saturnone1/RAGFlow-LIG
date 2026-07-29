@@ -280,9 +280,8 @@ async def get_storage_binary(bucket, name):
 @timeout(60 * 80, 1)
 async def build_chunks(task, progress_callback):
     if task["size"] > settings.DOC_MAXIMUM_SIZE:
-        set_progress(task["id"], prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
         get_recording_context().record("file_size_exceeded", True)
-        return []
+        raise ValueError("File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
     get_recording_context().record("file_size_exceeded", False)
     get_recording_context().record("parser_id", task["parser_id"])
 

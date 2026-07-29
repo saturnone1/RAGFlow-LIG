@@ -18,6 +18,19 @@ function Invoke-Docker([string[]]$Arguments) {
     } finally { $ErrorActionPreference = $previous }
     if ($exitCode -ne 0) { throw "docker failed with exit code $exitCode" }
 }
+
+function Invoke-DockerCapture([string[]]$Arguments, [switch]$AllowFailure) {
+    $previous = $ErrorActionPreference
+    $exitCode = 1
+    $output = @()
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& docker @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($exitCode -ne 0 -and -not $AllowFailure) { throw "docker failed with exit code $exitCode" }
+    return [pscustomobject]@{ ExitCode = $exitCode; Lines = $output }
+}
 $destinationPath = [IO.Path]::GetFullPath($Destination)
 $deploymentDirectory = $PSScriptRoot
 $workspaceDirectory = Split-Path $deploymentDirectory -Parent
@@ -44,6 +57,7 @@ $bundleFiles = @(
     @{ Source = (Join-Path $bundleTemplateDirectory "stop-embedding.ps1"); Target = "stop-embedding.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "status.ps1"); Target = "status.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "test-embedding.ps1"); Target = "test-embedding.ps1" },
+    @{ Source = (Join-Path $deploymentDirectory "verify-cpu-images.ps1"); Target = "verify-cpu-images.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "diagnostics.ps1"); Target = "diagnostics.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "diagnostics-gpu.ps1"); Target = "diagnostics-gpu.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "logs.ps1"); Target = "logs.ps1" },
@@ -78,9 +92,9 @@ foreach ($bundleFile in $bundleFiles) {
 }
 
 $images = @(
-    "lig/ragflow-ui:v0.26.4-1",
-    "lig/ragflow-mcp:v0.26.4-1",
-    "lig/paddleocr-ko:v0.26.4-1",
+    "lig/ragflow-ui:v0.26.4-2",
+    "lig/ragflow-mcp:v0.26.4-2",
+    "lig/paddleocr-ko:v0.26.4-2",
     "infiniflow/ragflow:v0.26.4",
     "infiniflow/infinity:v0.7.0",
     "mysql:8.0.39",
@@ -88,16 +102,17 @@ $images = @(
     "valkey/valkey:8"
 )
 if ($IncludeGpu) {
-    $images += @("lig/ragflow-ui-gpu:v0.26.4-1", "lig/paddleocr-ko-gpu:v0.26.4-1")
+    $images += @("lig/ragflow-ui-gpu:v0.26.4-2", "lig/paddleocr-ko-gpu:v0.26.4-2")
 }
 foreach ($image in $images) {
-    docker image inspect $image *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Required image is missing: $image" }
+    $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+    if ($inspect.ExitCode -ne 0) { throw "Required image is missing: $image" }
 }
 $imageIds = [ordered]@{}
 foreach ($image in $images) {
-    $imageIds[$image] = (& docker image inspect --format '{{.Id}}' $image).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $imageIds[$image]) { throw "Could not resolve image ID: $image" }
+    $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+    $imageIds[$image] = ([string]($inspect.Lines | Where-Object { $_ -match '^sha256:[0-9a-fA-F]{64}$' } | Select-Object -Last 1)).Trim()
+    if ($inspect.ExitCode -ne 0 -or -not $imageIds[$image]) { throw "Could not resolve image ID: $image" }
 }
 
 $uncompressedArchive = Join-Path $destinationPath "lig-ragflow-images-v0.26.4.tar"
@@ -115,6 +130,9 @@ if ($ExistingImageArchive) {
         throw "The existing archive must have a sibling manifest.json: $existingManifestPath"
     }
     $existingManifest = Get-Content -LiteralPath $existingManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($existingManifest.bundleFormat -ne 9) {
+        throw "Existing image archive uses unsupported bundle format: $($existingManifest.bundleFormat)"
+    }
     $expectedImages = @($images | Sort-Object)
     $archivedImages = @($existingManifest.images | Sort-Object)
     if (($expectedImages -join "`n") -ne ($archivedImages -join "`n")) {
@@ -181,9 +199,10 @@ if ($IncludeEmbedding) {
     "lig/qwen3-embedding-adapter:0.6b-1"
     )
     foreach ($image in $embeddingImages) {
-        docker image inspect $image *> $null
-        if ($LASTEXITCODE -ne 0) { throw "Requested optional embedding image is missing: $image" }
-        $embeddingImageIds[$image] = (& docker image inspect --format '{{.Id}}' $image).Trim()
+        $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+        if ($inspect.ExitCode -ne 0) { throw "Requested optional embedding image is missing: $image" }
+        $embeddingImageIds[$image] = ([string]($inspect.Lines | Where-Object { $_ -match '^sha256:[0-9a-fA-F]{64}$' } | Select-Object -Last 1)).Trim()
+        if (-not $embeddingImageIds[$image]) { throw "Could not resolve optional embedding image ID: $image" }
     }
     $embeddingTar = Join-Path $destinationPath "lig-qwen3-embedding-images-0.6b.tar"
     $embeddingArchive = Join-Path $destinationPath "lig-qwen3-embedding-images-0.6b.tar.gz"
@@ -215,14 +234,14 @@ $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Ob
     [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = $hash.Hash.ToLowerInvariant() }
 }
 $manifest = [pscustomobject]@{
-    bundleFormat = 8
+    bundleFormat = 9
     ragflowVersion = "v0.26.4"
-    uiImage = "lig/ragflow-ui:v0.26.4-1"
+    uiImage = "lig/ragflow-ui:v0.26.4-2"
     gpuIncluded = [bool]$IncludeGpu
-    gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-1" } else { $null }
-    mcpImage = "lig/ragflow-mcp:v0.26.4-1"
-    ocrImage = "lig/paddleocr-ko:v0.26.4-1"
-    gpuOcrImage = if ($IncludeGpu) { "lig/paddleocr-ko-gpu:v0.26.4-1" } else { $null }
+    gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-2" } else { $null }
+    mcpImage = "lig/ragflow-mcp:v0.26.4-2"
+    ocrImage = "lig/paddleocr-ko:v0.26.4-2"
+    gpuOcrImage = if ($IncludeGpu) { "lig/paddleocr-ko-gpu:v0.26.4-2" } else { $null }
     images = @($images)
     imageIds = $imageIds
     embeddingImages = @($embeddingImages)

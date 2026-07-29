@@ -176,6 +176,8 @@ RAGFlow 웹 UI의 `설정 → 모델 공급자`에서 다음 값을 등록합니
 
 DeepDoc/PaddleOCR GPU와 이 embedding 서비스는 별개입니다. Qwen3는 CPU에서 실행되므로 12 GiB GPU VRAM을 사용하지 않지만, Docker 시스템 RAM을 유휴 상태에서 약 1.5 GiB 추가 사용합니다. Compose는 임의의 CPU·RAM 상한을 두지 않습니다.
 
+기본 이미지 반입 후에는 `verify-cpu-images.ps1`을 실행해 암호 PDF 본문 보존, 일반 문서 암호 상태 정리, PaddleOCR 한국어 모델 및 런타임 패치 포함 여부를 이미지 내부에서 확인할 수 있습니다. GPU 설치에서도 공통 CPU 이미지 세트 검증에는 같은 명령을 사용합니다.
+
 새 embedding 모델을 기본값으로 지정해도 기존 데이터셋의 `embd_id`는 자동 변경되지 않습니다. 기존 데이터셋은 그대로 유지하고 새 데이터셋으로 검색 품질을 검증하십시오. 기존 데이터셋을 전환해야 한다면 문서를 전부 재인덱싱해야 하며, 서로 다른 모델의 벡터를 한 데이터셋에 섞지 마십시오.
 
 ### 한국어 OCR 선택
@@ -184,18 +186,20 @@ DeepDoc/PaddleOCR GPU와 이 embedding 서비스는 별개입니다. Qwen3는 CP
 
 1. 데이터셋 기본 설정의 언어를 `Korean`으로 지정합니다.
 2. 텍스트 선택과 복사가 정상인 PDF는 PDF 파서 `Plain Text`를 사용합니다.
-3. 스캔 PDF나 글꼴 매핑이 깨진 PDF는 청킹 `Naive`, PDF 파서 `paddleocr-from-env`를 선택합니다. 이 파서를 쓰는 데이터셋은 PDF 전체를 단일 RAGFlow 작업으로 처리해 작업 분할에 따른 중복 OCR을 방지합니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되므로 별도로 입력하지 않습니다.
+3. 스캔 PDF나 글꼴 매핑이 깨진 PDF는 청킹 `Naive`, PDF 파서 `paddleocr-from-env`를 선택합니다. 이 파서는 PDF를 기본 12쪽 단위로 나누되 각 작업 범위의 페이지만 OCR 서비스에 보내므로 전체 원본을 작업마다 반복 처리하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되므로 별도로 입력하지 않습니다.
 4. 파서를 바꾼 뒤 기존의 잘못된 청크를 삭제하고 문서를 다시 처리합니다.
 
 DeepDOC는 영어·중국어 문서와 표·레이아웃·좌표 처리용으로 유지합니다. PaddleOCR 한국어 모델은 한국어·영어·숫자 인식에 집중하므로 모든 문서에 대한 무조건적인 대체재는 아닙니다.
 
 업로드 창은 PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, HWP/HWPX별 파일 열기 비밀번호를 받습니다. 암호화된 최신 Office와 HWPX는 업로드 때 검증하고 파싱 직전에 메모리에서 복호화합니다. 일반 HWP 5와 HWPX도 텍스트로 처리하지만 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 배포용 HWP, 편집·시트 보호, Microsoft IRM/MIP/AIP 및 FASOO DRM은 권한 우회 대상이 아닙니다. `.env.secret`의 활성/이전 키를 잃으면 저장된 문서 암호를 다시 사용할 수 없으므로 DB와 같은 복구 시점으로 암호화 백업하십시오. 전체 확장자 표와 키 감사·회전·복구 절차는 상위 `DOCUMENT-COMPATIBILITY.ko.md`를 따릅니다.
 
+암호 PDF의 작업 기록이 `OCR started`까지 진행됐다면 파일 열기 암호는 통과한 상태입니다. 소유자 암호가 필요한 권한 제한 PDF는 OCR 전에 명시적인 권한 오류가 표시됩니다.
+
 온라인 NVIDIA `nvidia/llama-nemotron-embed-vl-1b-v2`와 로컬 Qwen3는 벡터 차원과 의미 공간이 다릅니다. 운영 모델을 결정한 뒤 고정하고, 변경 시 전체 재인덱싱 계획을 세우십시오.
 
 ## 8. 문서 처리 설정
 
-기본 성능 설정은 `LIG-Deployment\.env.lig`에 있습니다.
+기본 성능 설정은 `LIG-Deployment\.env.lig`에 있습니다. 기본 `API_PROXY_SCHEME=python`은 문서 암호 처리와 OCR/청킹 보강이 모두 적용되는 실행 경로입니다. upstream Go/Hybrid 모드로 바꿀 수는 있지만 해당 LIG 확장 전체는 보장되지 않습니다.
 
 ```dotenv
 TASK_EXECUTOR_WORKERS=2

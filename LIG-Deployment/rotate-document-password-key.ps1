@@ -34,7 +34,18 @@ function Set-EnvValue([string[]]$Lines, [string]$Name, [string]$Value) {
 
 function Invoke-KeyTool([string[]]$Arguments) {
     if (-not $script:containerName) {
-        $script:containerName = @(& docker ps --format '{{.Names}}') |
+        $previousErrorActionPreference = $ErrorActionPreference
+        $dockerExitCode = 1
+        try {
+            $ErrorActionPreference = "Continue"
+            $containerNames = @(& docker ps --format '{{.Names}}' 2>&1 | ForEach-Object { $_.ToString() })
+            $dockerExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($dockerExitCode -ne 0) { throw "Could not query running Docker containers." }
+        $script:containerName = $containerNames |
             Where-Object { $_ -in @("lig-ragflow-ragflow-cpu-1", "lig-ragflow-ragflow-gpu-1") } |
             Select-Object -First 1
     }

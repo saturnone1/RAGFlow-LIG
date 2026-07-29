@@ -15,6 +15,19 @@ function Invoke-Docker([string[]]$Arguments) {
     } finally { $ErrorActionPreference = $previous }
     if ($exitCode -ne 0) { throw "docker failed with exit code $exitCode" }
 }
+
+function Invoke-DockerCapture([string[]]$Arguments, [switch]$AllowFailure) {
+    $previous = $ErrorActionPreference
+    $exitCode = 1
+    $output = @()
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& docker @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($exitCode -ne 0 -and -not $AllowFailure) { throw "docker failed with exit code $exitCode" }
+    return [pscustomobject]@{ ExitCode = $exitCode; Lines = $output }
+}
 $sourcePath = [IO.Path]::GetFullPath($Source)
 $manifestPath = Join-Path $sourcePath "manifest.json"
 $archivePath = Join-Path $sourcePath "lig-qwen3-embedding-images-0.6b.tar.gz"
@@ -24,7 +37,7 @@ foreach ($path in @($manifestPath, $archivePath)) {
 }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 8) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
+if ($manifest.bundleFormat -ne 9) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
 if (-not $manifest.embeddingIncluded) { throw "This bundle does not include the optional embedding archive." }
 if ($manifest.embeddingModel -ne "Qwen/Qwen3-Embedding-0.6B") { throw "Unsupported embedding model: $($manifest.embeddingModel)" }
 
@@ -47,8 +60,9 @@ Invoke-Docker @("load", "--input", $archivePath)
 foreach ($image in $expectedImages) {
     $expectedIdProperty = $manifest.embeddingImageIds.PSObject.Properties[$image]
     if (-not $expectedIdProperty) { throw "Embedding image ID is absent from the manifest: $image" }
-    $actualId = (& docker image inspect --format '{{.Id}}' $image).Trim()
-    if ($LASTEXITCODE -ne 0 -or $actualId -ne [string]$expectedIdProperty.Value) {
+    $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+    $actualId = ([string]($inspect.Lines | Where-Object { $_ -match '^sha256:[0-9a-fA-F]{64}$' } | Select-Object -Last 1)).Trim()
+    if ($inspect.ExitCode -ne 0 -or $actualId -ne [string]$expectedIdProperty.Value) {
         throw "Loaded embedding image ID does not match the manifest: $image"
     }
 }

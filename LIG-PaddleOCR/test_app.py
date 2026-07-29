@@ -51,6 +51,14 @@ class OcrJobLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pixel OCR limit"):
             ocr_app._validate_page_pixels(ocr_app.MAX_PAGE_PIXELS, 2)
 
+    def test_pdf_render_scale_does_not_double_scale_or_reject_large_pages(self) -> None:
+        self.assertEqual(ocr_app._pdf_render_scale(1000, 1000), ocr_app.RENDER_SCALE)
+        scale = ocr_app._pdf_render_scale(ocr_app.MAX_PAGE_PIXELS, 2)
+        self.assertLess(scale, 1.0)
+        self.assertLessEqual(ocr_app.MAX_PAGE_PIXELS * 2 * scale * scale, ocr_app.MAX_PAGE_PIXELS + 1)
+        with self.assertRaisesRegex(ValueError, "dimensions must be positive"):
+            ocr_app._pdf_render_scale(0, 1000)
+
 
 if __name__ == "__main__":
     unittest.main()

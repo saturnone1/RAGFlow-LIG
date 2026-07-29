@@ -82,6 +82,28 @@ function Invoke-Docker([string[]]$Arguments) {
     if ($dockerExitCode -ne 0) { throw "docker failed with exit code $dockerExitCode" }
 }
 
+function Invoke-DockerCapture([string[]]$Arguments, [switch]$AllowFailure) {
+    $dockerExecutable = (Get-Command docker -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $previousErrorActionPreference = $ErrorActionPreference
+    $dockerExitCode = 1
+    $output = @()
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& $dockerExecutable @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $dockerExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($dockerExitCode -ne 0 -and -not $AllowFailure) {
+        throw "docker failed with exit code $dockerExitCode"
+    }
+    return [pscustomobject]@{
+        ExitCode = $dockerExitCode
+        Lines = $output
+    }
+}
+
 function Assert-FreeSpace {
     $drive = Get-PSDrive -Name C
     $freeGiB = [math]::Round($drive.Free / 1GB, 1)
@@ -171,11 +193,11 @@ function Assert-LigConfiguration {
     if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1) {
         throw "TASK_EXECUTOR_WORKERS must be a positive integer. Current value: $workerValue"
     }
-    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_MAX_UPLOAD_BYTES", "PADDLEOCR_MAX_PDF_PAGES", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS")) {
+    foreach ($settingName in @("MAX_CONTENT_LENGTH", "DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_UPLOAD_BYTES", "PADDLEOCR_MAX_PDF_PAGES", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS")) {
         $settingValue = Get-ConfigurationValue $configuration $settingName
         if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
-        $parsed = 0
-        if (-not [int]::TryParse($settingValue, [ref]$parsed) -or $parsed -lt 1) {
+        [long]$parsed = 0
+        if (-not [long]::TryParse($settingValue, [ref]$parsed) -or $parsed -lt 1) {
             throw "$settingName must be a positive integer. Current value: $settingValue"
         }
     }
@@ -199,28 +221,46 @@ function Invoke-Diagnostics {
         throw "SVR_HTTP_PORT must end with a numeric port. Current value: $apiBinding"
     }
     $apiBase = "http://127.0.0.1:$apiPort"
+    $apiReachable = $false
     $serviceHealth = $null
+    $healthDetail = $null
     $apiError = $null
-    $dockerServerVersion = (& docker version --format '{{.Server.Version}}' 2>$null)
-    $dockerError = if ($LASTEXITCODE -eq 0) { $null } else { "Docker engine is unavailable." }
+    $dockerVersionResult = Invoke-DockerCapture -Arguments @("version", "--format", "{{.Server.Version}}") -AllowFailure
+    $dockerServerVersion = $dockerVersionResult.Lines
+    $dockerError = if ($dockerVersionResult.ExitCode -eq 0) { $null } else { "Docker engine is unavailable." }
 
     try {
-        $headers = @{}
-        if ($apiKey -and $apiKey -notmatch '^replace-') { $headers["Authorization"] = "Bearer $apiKey" }
-        $response = Invoke-RestMethod -Uri "$apiBase/api/v1/system/status" -Headers $headers -TimeoutSec 10
-        $serviceHealth = $response.data
-    } catch {
+        $ping = Invoke-WebRequest -Uri "$apiBase/api/v1/system/ping" -UseBasicParsing -TimeoutSec 10
+        $apiReachable = $ping.StatusCode -eq 200 -and $ping.Content.Trim() -eq "pong"
+    }
+    catch {
         $apiError = $_.Exception.Message
     }
+    $hasUsableApiKey = $apiKey -and $apiKey -notmatch 'replace-with'
+    if ($apiReachable -and $hasUsableApiKey) {
+        try {
+            $headers = @{ Authorization = "Bearer $apiKey" }
+            $response = Invoke-RestMethod -Uri "$apiBase/api/v1/system/status" -Headers $headers -TimeoutSec 10
+            $serviceHealth = $response.data
+        }
+        catch {
+            $healthDetail = "Authenticated dependency status is unavailable: $($_.Exception.Message)"
+        }
+    }
+    elseif ($apiReachable) {
+        $healthDetail = "RAGFlow API is reachable; configure RAGFLOW_MCP_API_KEY for authenticated dependency details."
+    }
 
-    $composeRows = @(& docker @composeArguments ps --format json 2>$null | ForEach-Object {
+    $composeResult = Invoke-DockerCapture -Arguments (@($composeArguments) + @("ps", "--format", "json")) -AllowFailure
+    $composeRows = @($composeResult.Lines | ForEach-Object {
         try { $_ | ConvertFrom-Json } catch { $null }
     } | Where-Object { $null -ne $_ })
 
     $containerNames = @($composeRows | ForEach-Object { $_.Name } | Where-Object { $_ })
     $stats = @()
     if ($containerNames.Count -gt 0) {
-        $stats = @(& docker stats --no-stream --format '{{json .}}' @containerNames 2>$null | ForEach-Object {
+        $statsResult = Invoke-DockerCapture -Arguments (@("stats", "--no-stream", "--format", "{{json .}}") + $containerNames) -AllowFailure
+        $stats = @($statsResult.Lines | ForEach-Object {
             try { $_ | ConvertFrom-Json } catch { $null }
         } | Where-Object { $null -ne $_ })
     }
@@ -230,8 +270,10 @@ function Invoke-Diagnostics {
     $ragflowContainer = $containerNames | Where-Object { $_ -match 'ragflow-(cpu|gpu)' } | Select-Object -First 1
     $ragflowHostname = $null
     if ($ragflowContainer) {
-        $ragflowHostname = (& docker inspect --format '{{.Config.Hostname}}' $ragflowContainer 2>$null)
-        $logLines = @(& docker logs --tail 2000 $ragflowContainer 2>&1)
+        $inspectResult = Invoke-DockerCapture -Arguments @("inspect", "--format", "{{.Config.Hostname}}", $ragflowContainer) -AllowFailure
+        $ragflowHostname = $inspectResult.Lines | Select-Object -Last 1
+        $logsResult = Invoke-DockerCapture -Arguments @("logs", "--tail", "2000", $ragflowContainer) -AllowFailure
+        $logLines = $logsResult.Lines
         $timingSamples = @($logLines | Where-Object {
             $_ -match '(Chunk doc|Indexing doc|\[Done\]).*elapsed\s*:\s*[0-9]'
         } | Select-Object -Last 20 | ForEach-Object { Protect-DiagnosticText $_ })
@@ -255,8 +297,10 @@ function Invoke-Diagnostics {
         GeneratedAt = (Get-Date).ToString("o")
         DockerServerVersion = $dockerServerVersion
         DockerError = $dockerError
+        ApiReachable = $apiReachable
         Configuration = [pscustomobject]@{
             Device = Get-ConfigurationValue $configuration "DEVICE"
+            ApiProxyScheme = Get-ConfigurationValue $configuration "API_PROXY_SCHEME" "python"
             DocumentEngine = Get-ConfigurationValue $configuration "DOC_ENGINE"
             Profiles = Get-ConfigurationValue $configuration "COMPOSE_PROFILES"
             TaskExecutorWorkers = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "1"
@@ -280,6 +324,7 @@ function Invoke-Diagnostics {
         ContainerStats = $stats | Select-Object Name, CPUPerc, MemUsage, MemPerc, BlockIO, NetIO
         RecentStageTimings = $timingSamples
         RecentErrors = $recentErrors
+        HealthDetail = $healthDetail
         ApiError = $apiError
     }
 
@@ -299,23 +344,23 @@ switch ($Action) {
     }
     "ui-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-1", $workspaceDirectory)
-        Write-Host "Built lig/ragflow-ui:v0.26.4-1"
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-2", $workspaceDirectory)
+        Write-Host "Built lig/ragflow-ui:v0.26.4-2"
     }
     "mcp-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-1", $mcpDirectory)
-        Write-Host "Built lig/ragflow-mcp:v0.26.4-1"
+        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-2", $mcpDirectory)
+        Write-Host "Built lig/ragflow-mcp:v0.26.4-2"
     }
     "ocr-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-1", $ocrDirectory)
-        Write-Host "Built lig/paddleocr-ko:v0.26.4-1"
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-2", $ocrDirectory)
+        Write-Host "Built lig/paddleocr-ko:v0.26.4-2"
     }
     "gpu-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $gpuUiDockerfile, "--tag", "lig/ragflow-ui-gpu:v0.26.4-1", $workspaceDirectory)
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-1", "--tag", "lig/paddleocr-ko-gpu:v0.26.4-1", $ocrDirectory)
+        Invoke-Docker @("build", "--file", $gpuUiDockerfile, "--tag", "lig/ragflow-ui-gpu:v0.26.4-2", $workspaceDirectory)
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-2", "--tag", "lig/paddleocr-ko-gpu:v0.26.4-2", $ocrDirectory)
         Write-Host "Built LIG CUDA 12.8 RAGFlow and Korean PaddleOCR images."
     }
     "embedding-build" {
@@ -326,52 +371,76 @@ switch ($Action) {
     }
     "build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-1", $workspaceDirectory)
-        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-1", $mcpDirectory)
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-1", $ocrDirectory)
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-2", $workspaceDirectory)
+        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-2", $mcpDirectory)
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-2", $ocrDirectory)
         Write-Host "Built LIG UI, management MCP, and Korean PaddleOCR images."
     }
     "start" {
         Assert-LigConfiguration
         Assert-FreeSpace
         $configuration = Get-EnvFileValues $ligEnvFile
-        $device = Get-ConfigurationValue $configuration "DEVICE" "cpu"
-        if ($device -eq "gpu") {
-            foreach ($image in @(
-                (Get-ConfigurationValue $configuration "RAGFLOW_GPU_IMAGE"),
-                (Get-ConfigurationValue $configuration "PADDLEOCR_GPU_IMAGE")
-            )) {
-                if ([string]::IsNullOrWhiteSpace($image)) {
-                    throw "GPU image configuration is missing. Set RAGFLOW_GPU_IMAGE and PADDLEOCR_GPU_IMAGE."
-                }
-                & docker image inspect $image *> $null
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Required GPU image is missing: $image. Run gpu-build or import the GPU air-gap bundle first."
-                }
+        $device = (Get-ConfigurationValue $configuration "DEVICE" "cpu").Trim().ToLowerInvariant()
+        if ($device -notin @("cpu", "gpu")) {
+            throw "DEVICE must be cpu or gpu. Current value: $device"
+        }
+
+        $ragflowImage = if ($device -eq "gpu") {
+            Get-ConfigurationValue $configuration "RAGFLOW_GPU_IMAGE"
+        } else {
+            Get-ConfigurationValue $configuration "RAGFLOW_IMAGE"
+        }
+        $ocrImage = if ($device -eq "gpu") {
+            Get-ConfigurationValue $configuration "PADDLEOCR_GPU_IMAGE"
+        } else {
+            Get-ConfigurationValue $configuration "PADDLEOCR_IMAGE"
+        }
+        $mcpImage = Get-ConfigurationValue $configuration "RAGFLOW_MCP_LIG_IMAGE" "lig/ragflow-mcp:v0.26.4-2"
+        foreach ($requiredImage in @($ragflowImage, $ocrImage, $mcpImage)) {
+            if ([string]::IsNullOrWhiteSpace($requiredImage)) {
+                throw "Required $device image configuration is missing. Check RAGFLOW_IMAGE, RAGFLOW_GPU_IMAGE, PADDLEOCR_IMAGE, PADDLEOCR_GPU_IMAGE, and RAGFLOW_MCP_LIG_IMAGE."
             }
         }
-        & docker image inspect "lig/ragflow-mcp:v0.26.4-1" *> $null
-        if ($LASTEXITCODE -ne 0) {
+
+        $ragflowImageInspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $ragflowImage) -AllowFailure
+        if ($ragflowImageInspect.ExitCode -ne 0) {
+            if ($device -eq "gpu") {
+                throw "Required GPU RAGFlow image is missing: $ragflowImage. Run gpu-build or import the GPU air-gap bundle first."
+            }
+            if (-not (Test-Path -LiteralPath $uiDockerfile -PathType Leaf)) {
+                throw "RAGFlow image is missing and its Dockerfile is unavailable: $ragflowImage"
+            }
+            Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", $ragflowImage, $workspaceDirectory)
+        }
+
+        $mcpImageInspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $mcpImage) -AllowFailure
+        if ($mcpImageInspect.ExitCode -ne 0) {
             if (-not (Test-Path -LiteralPath $mcpDockerfile -PathType Leaf)) {
                 throw "Management MCP image is missing and its Dockerfile is unavailable: $mcpDockerfile"
             }
-            Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-1", $mcpDirectory)
+            Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", $mcpImage, $mcpDirectory)
         }
-        & docker image inspect "lig/paddleocr-ko:v0.26.4-1" *> $null
-        if ($LASTEXITCODE -ne 0) {
+        $ocrImageInspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $ocrImage) -AllowFailure
+        if ($ocrImageInspect.ExitCode -ne 0) {
+            if ($device -eq "gpu") {
+                throw "Required GPU PaddleOCR image is missing: $ocrImage. Run gpu-build or import the GPU air-gap bundle first."
+            }
             if (-not (Test-Path -LiteralPath $ocrDockerfile -PathType Leaf)) {
                 throw "Korean PaddleOCR image is missing and its Dockerfile is unavailable: $ocrDockerfile"
             }
-            Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-1", $ocrDirectory)
+            Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=$ragflowImage", "--tag", $ocrImage, $ocrDirectory)
         }
-        Invoke-Compose @("up", "-d", "--remove-orphans", "--wait", "--wait-timeout", "300")
+        # Start asynchronously. RAGFlow's health check verifies every backing
+        # service and can remain in "Waiting" long after the containers have
+        # started, which makes an otherwise successful start look hung.
+        Invoke-Compose @("up", "-d", "--remove-orphans")
         Invoke-Compose @("ps")
     }
     "embedding-start" {
         Assert-FreeSpace
         foreach ($image in @("lig/qwen3-embedding-tei:0.6b-1", "lig/qwen3-embedding-adapter:0.6b-1")) {
-            & docker image inspect $image *> $null
-            if ($LASTEXITCODE -ne 0) {
+            $imageInspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+            if ($imageInspect.ExitCode -ne 0) {
                 throw "Optional embedding image is missing: $image. Run embedding-build or import the air-gap bundle first."
             }
         }
@@ -405,7 +474,10 @@ switch ($Action) {
             throw "Unexpected embedding health response."
         }
         $body = @{ inputs = @("국방 문서 검색 시험", "defense document retrieval test") } | ConvertTo-Json -Compress
-        $vectors = Invoke-RestMethod -Uri "$baseUrl/embed" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 120
+        # Windows PowerShell 5.1 otherwise encodes a string request body with
+        # the active ANSI code page. Send explicit UTF-8 bytes for Korean text.
+        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+        $vectors = Invoke-RestMethod -Uri "$baseUrl/embed" -Method Post -ContentType "application/json; charset=utf-8" -Body $bodyBytes -TimeoutSec 120
         if (@($vectors).Count -ne 2 -or @($vectors[0]).Count -ne 1024 -or @($vectors[1]).Count -ne 1024) {
             throw "Embedding response must contain two 1024-dimensional vectors."
         }
@@ -414,7 +486,7 @@ switch ($Action) {
     "stop" { Invoke-Compose @("down") }
     "status" {
         Invoke-Compose @("ps")
-        & docker system df
+        Invoke-Docker @("system", "df")
     }
     "diagnostics" { Invoke-Diagnostics }
     "logs" { Invoke-Compose @("logs", "--tail", "200") }

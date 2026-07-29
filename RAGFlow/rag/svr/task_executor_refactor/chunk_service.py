@@ -109,9 +109,8 @@ class ChunkService:
         ctx = self._task_context
         # Validate file size
         if ctx.size > settings.DOC_MAXIMUM_SIZE:
-            self._progress(prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
             self._task_context.recording_context.record("file_size_exceeded", True)
-            return []
+            raise ValueError("File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))
         ctx.recording_context.record("file_size_exceeded", False)
         ctx.recording_context.record("parser_id", ctx.parser_id)
 

@@ -46,7 +46,7 @@
 | `42316` | 한국어 PaddleOCR API |
 | `42317` | 선택형 Qwen3 임베딩 API |
 
-`LIG-Deployment/.env.lig`는 upstream 기본값을 덮어쓰고, `LIG-Deployment/docker-compose.lig.yml`은 로그 크기 상한과 LIG 서비스 구성을 추가합니다. 컨테이너별 CPU·시스템 RAM 상한은 두지 않습니다. 로그 회전 상한은 디스크 고갈 방지 설정이므로 유지합니다. 공식 소스와 Compose는 `RAGFlow/` 아래에 원본 그대로 유지되며, 데이터는 named volume에 저장되므로 컨테이너를 다시 만들어도 유지됩니다.
+`LIG-Deployment/.env.lig`는 upstream 기본값을 덮어쓰고, `LIG-Deployment/docker-compose.lig.yml`은 로그 크기 상한과 LIG 서비스 구성을 추가합니다. 문서 암호 처리와 OCR/청킹 보강이 적용된 경로를 기본 사용하도록 `API_PROXY_SCHEME=python`을 설정합니다. upstream의 Go/Hybrid 모드를 명시적으로 선택하는 기능은 막지 않지만, 그 경로에서는 LIG 문서 암호와 OCR 보강 전체가 적용되지 않습니다. 컨테이너별 CPU·시스템 RAM 상한은 두지 않습니다. 로그 회전 상한은 디스크 고갈 방지 설정이므로 유지합니다. 공식 소스와 Compose는 `RAGFlow/` 아래에 원본 그대로 유지되며, 데이터는 named volume에 저장되므로 컨테이너를 다시 만들어도 유지됩니다.
 
 ## 실행
 
@@ -59,8 +59,11 @@ Copy-Item .env.secret.example .env.secret
 .\lig-ragflow.ps1 config
 .\lig-ragflow.ps1 pull
 .\lig-ragflow.ps1 build
+.\verify-cpu-images.ps1
 .\lig-ragflow.ps1 start
 ```
+
+`verify-cpu-images.ps1`은 별도 테스트 패키지를 설치하지 않고 빌드된 이미지 안에서 암호 PDF의 실제 본문 보존, 일반 문서의 잔존 암호 제거, 청킹 방식 변경 시 봉인 암호 승계, OCR/청킹 런타임 패치 포함, 한국어 PP-OCRv5 모델 메타데이터와 대형 페이지 축소 계산, MCP .NET 런타임을 검사합니다.
 
 NVIDIA GPU 실행 이미지는 CPU 이미지 위에 고정된 CUDA 12.8·cuDNN 9 라이브러리를 추가합니다. GPU 장비 또는 CPU/GPU 에어갭 번들을 만들 PC에서는 기본 빌드 후 다음 명령도 실행합니다.
 
@@ -114,9 +117,11 @@ RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Ba
 
 upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 LIG 기본 프로파일에는 포함하지 않으며, task executor 프로세스가 RAGFlow 이미지 안의 DeepDoc 모듈을 직접 호출합니다. `DEEPDOC_URL`을 사용한 독립 서비스 운영을 검증하지 않은 상태에서 `deepdoc` 프로파일만 켜도 ingestion이 자동 분리되지는 않습니다.
 
-한국어 스캔 PDF에는 별도 `paddleocr-cpu` 또는 `paddleocr-gpu` 서비스가 자동 실행됩니다. 이 서비스는 한국어·영어·숫자를 지원하는 PP-OCRv5 한국어 모델을 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 파일 크기나 페이지 수를 임의로 제한하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. PaddleOCR 데이터셋은 PDF 전체를 단일 RAGFlow 작업으로 구성하여 페이지 작업마다 같은 PDF를 다시 OCR하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되며 데이터셋 화면에서 별도로 입력하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
+한국어 스캔 PDF에는 별도 `paddleocr-cpu` 또는 `paddleocr-gpu` 서비스가 자동 실행됩니다. 이 서비스는 한국어·영어·숫자를 지원하는 PP-OCRv5 한국어 모델을 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. RAGFlow는 PDF를 `PADDLEOCR_TASK_PAGE_SIZE` 단위의 작업으로 나누고, 각 작업은 해당 페이지만 새 PDF로 구성해 OCR 서비스에 전송하므로 전체 원본을 작업마다 반복 처리하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되며 데이터셋 화면에서 별도로 입력하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
 
 **파일 열기 암호**를 설정한 PDF, Word(`.docx`/`.doc`), Excel(`.xlsx`/`.xls`), PowerPoint(`.pptx`/`.ppt`) 및 HWPX는 업로드 창에서 파일별 비밀번호를 입력할 수 있습니다. 업로드 단계에서 암호를 검증한 뒤 원본 암호화 문서는 그대로 저장하고, 비밀번호는 `.env.secret`의 `LIG_DOCUMENT_PASSWORD_KEY`로 AES-256-GCM 암호화해 문서 설정에 보관합니다. 작업자는 파싱 직전에 메모리에서 문서를 복호화해 기존 파서로 전달합니다. HWPX는 한컴의 AES-256-CBC/PBKDF2 형식을 복호화하고 XML 본문을 텍스트로 변환하며, 일반 HWP 5와 HWPX도 텍스트 문서로 처리합니다. 잘못된 암호는 업로드 오류로 바로 표시되며, 문서의 청킹 방식 설정에서 새 암호를 저장하고 재실행할 수도 있습니다.
+
+암호 PDF 처리 기록이 `OCR started`까지 진행됐다면 입력한 파일 열기 암호는 이미 검증된 것입니다. 권한 제한 PDF에 소유자 암호가 필요한 경우에는 OCR 전에 별도 오류로 중단됩니다. 현재 이미지는 Adobe 계열 암호 PDF를 복호화할 때 암호화된 문서 카탈로그를 복제하지 않고 각 페이지를 새 비암호 PDF로 재구성하여, 페이지 수만 남고 OCR 본문이 비는 문제를 방지합니다.
 
 암호화된 바이너리 HWP는 검증된 공개 복호화 구현이 없어 현재 명시적으로 거부하며 HWPX 또는 DOCX로 다시 저장해야 합니다. HWP 배포용 문서, PDF 권한 제한, Office 편집·시트 보호처럼 열람이 아니라 사용 권한을 제한하는 문서는 우회하지 않습니다. Microsoft IRM/MIP/AIP, FASOO 등 계정·인증서·권한 서버 기반 DRM도 대상이 아닙니다. 레거시 `.xls`와 `.ppt`의 오래된 암호 규격은 복호화 라이브러리의 실험적·부분 지원 범위에 따라 거부될 수 있습니다.
 
@@ -134,7 +139,7 @@ TASK_EXECUTOR_WORKERS=2
 
 문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로는 LIG 이미지의 60초 공급자 요청 제한을 기준으로 embedding batch를 2로 설정합니다. 요청 단위 조정이며 자원 상한은 아닙니다. 설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`는 값이 양의 정수인지 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
 
-내부 PaddleOCR는 기본적으로 업로드 256 MiB, PDF 2,000쪽, 페이지당 렌더링 5천만 픽셀, 활성 작업 8개로 제한하며 임시 디스크 512 MiB를 남깁니다. `PADDLEOCR_MAX_UPLOAD_BYTES`, `PADDLEOCR_MAX_PDF_PAGES`, `PADDLEOCR_MAX_PAGE_PIXELS`, `PADDLEOCR_MAX_PENDING_JOBS`, `PADDLEOCR_MIN_FREE_BYTES`로 조정할 수 있습니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 TTL 정리 대상에서 제외합니다. 내부 Bearer 토큰은 최초 `config`/`start` 때 `.env.secret`에 자동 생성되며 미설정 상태로는 OCR 서비스가 시작되지 않습니다.
+내부 PaddleOCR는 기본적으로 업로드 1 GiB, OCR 작업당 PDF 2,000쪽, 페이지당 렌더링 5천만 픽셀, 활성 작업 8개로 제한하며 임시 디스크 512 MiB를 남깁니다. RAGFlow는 `PADDLEOCR_TASK_PAGE_SIZE`(기본 12쪽) 단위로 나눈 범위만 OCR 서비스에 전송하므로 대용량 PDF 원본을 작업마다 반복 처리하지 않으며, 예전 UI가 저장한 과도한 작업 크기도 자동으로 제한합니다. 큰 PDF 페이지는 픽셀 한도 안에서 자동 축소합니다. RAGFlow 업로드·청킹 제한과 PaddleOCR 제한은 `.env.lig`의 `MAX_CONTENT_LENGTH`와 `PADDLEOCR_MAX_UPLOAD_BYTES`에서 동일하게 유지합니다. `PADDLEOCR_TASK_PAGE_SIZE`, `PADDLEOCR_MAX_PDF_PAGES`, `PADDLEOCR_MAX_PAGE_PIXELS`, `PADDLEOCR_MAX_PENDING_JOBS`, `PADDLEOCR_MIN_FREE_BYTES`도 조정할 수 있습니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 TTL 정리 대상에서 제외합니다. 내부 Bearer 토큰은 최초 `config`/`start` 때 `.env.secret`에 자동 생성되며 미설정 상태로는 OCR 서비스가 시작되지 않습니다.
 
 1. `diagnostics`의 task executor heartbeat 수가 설정값과 일치하는지 확인합니다.
 2. UI의 문서 처리 상세에서 현재 단계와 실제 `process_duration`을 확인합니다.
