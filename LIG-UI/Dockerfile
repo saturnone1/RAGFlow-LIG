@@ -56,6 +56,15 @@ RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/rag/app/picture.py \
         /ragflow/rag/svr/task_executor_refactor/chunk_service.py \
         /ragflow/rag/app/email.py \
+        /ragflow/rag/utils/redis_conn.py \
+        /ragflow/api/db/joint_services/tenant_model_service.py \
+        /ragflow/api/apps/__init__.py \
+        /ragflow/admin/server/admin_server.py \
+        /ragflow/rag/svr/task_executor_refactor/embedding_service.py \
+        /ragflow/rag/svr/task_executor_refactor/dataflow_service.py \
+        /ragflow/rag/llm/ocr_model.py \
     && rm /tmp/apply-lig-runtime-patches.py
+RUN sed -i 's/client_max_body_size 1024M;/client_max_body_size 0;/' /etc/nginx/nginx.conf \
+    && grep -q 'client_max_body_size 0;' /etc/nginx/nginx.conf
 RUN rm -rf /ragflow/web/dist && mkdir -p /ragflow/web/dist
 COPY --from=web-builder /build/web/dist/ /ragflow/web/dist/

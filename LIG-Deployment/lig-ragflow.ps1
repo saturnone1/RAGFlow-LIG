@@ -10,6 +10,8 @@ $dockerDirectory = Join-Path $workspaceDirectory "RAGFlow\docker"
 $upstreamEnvFile = Join-Path $dockerDirectory ".env"
 $ligEnvFile = Join-Path $deploymentDirectory ".env.lig"
 $secretFile = Join-Path $deploymentDirectory ".env.secret"
+$persistentStateDirectory = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "LIG-RAGFlow"
+$persistentSecretFile = Join-Path $persistentStateDirectory ".env.secret"
 $logDirectory = Join-Path $deploymentDirectory "ragflow-logs"
 $mcpDataDirectory = Join-Path $deploymentDirectory "mcp-files"
 $uiDockerfile = Join-Path $workspaceDirectory "LIG-UI\Dockerfile"
@@ -139,9 +141,39 @@ function New-RandomSecret {
     return [Convert]::ToBase64String($bytes)
 }
 
+function Get-ExistingContainerEnvValue([string]$Name) {
+    $containers = Invoke-DockerCapture -Arguments @(
+        "ps", "-a", "--filter", "label=com.docker.compose.project=lig-ragflow", "--format", "{{.Names}}"
+    ) -AllowFailure
+    if ($containers.ExitCode -ne 0) { return $null }
+    $orderedNames = @($containers.Lines | Where-Object { $_ -match 'ragflow-(worker-)?(cpu|gpu)' }) + @($containers.Lines)
+    foreach ($containerName in $orderedNames | Select-Object -Unique) {
+        $environment = Invoke-DockerCapture -Arguments @(
+            "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", $containerName
+        ) -AllowFailure
+        if ($environment.ExitCode -ne 0) { continue }
+        $prefix = "$Name="
+        $entry = $environment.Lines | Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) } | Select-Object -First 1
+        if ($entry) { return $entry.Substring($prefix.Length) }
+    }
+    return $null
+}
+
 function Ensure-LigSecrets {
     if (-not (Test-Path -LiteralPath $secretFile -PathType Leaf)) {
-        Copy-Item -LiteralPath (Join-Path $deploymentDirectory ".env.secret.example") -Destination $secretFile
+        if (Test-Path -LiteralPath $persistentSecretFile -PathType Leaf) {
+            Copy-Item -LiteralPath $persistentSecretFile -Destination $secretFile
+        }
+        else {
+            Copy-Item -LiteralPath (Join-Path $deploymentDirectory ".env.secret.example") -Destination $secretFile
+        }
+    }
+    elseif (Test-Path -LiteralPath $persistentSecretFile -PathType Leaf) {
+        $localValues = Get-EnvFileValues $secretFile
+        $localKey = $localValues["LIG_DOCUMENT_PASSWORD_KEY"]
+        if ([string]::IsNullOrWhiteSpace($localKey) -or $localKey -eq "generate-a-base64-encoded-32-byte-key") {
+            Copy-Item -LiteralPath $persistentSecretFile -Destination $secretFile -Force
+        }
     }
     $lines = @(Get-Content -LiteralPath $secretFile)
     $keyLineIndex = -1
@@ -161,16 +193,27 @@ function Ensure-LigSecrets {
         }
     }
     if ([string]::IsNullOrWhiteSpace($currentValue) -or $currentValue -eq "generate-a-base64-encoded-32-byte-key") {
+        $existingKey = Get-ExistingContainerEnvValue "LIG_DOCUMENT_PASSWORD_KEY"
+        if ($existingKey) {
+            if ($keyLineIndex -ge 0) { $lines[$keyLineIndex] = "LIG_DOCUMENT_PASSWORD_KEY=$existingKey" }
+            else { $lines += "LIG_DOCUMENT_PASSWORD_KEY=$existingKey"; $keyLineIndex = $lines.Count - 1 }
+            $currentValue = $existingKey
+            Write-Host "Recovered the existing document password key from the LIG runtime."
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($currentValue) -or $currentValue -eq "generate-a-base64-encoded-32-byte-key") {
         $keyLine = "LIG_DOCUMENT_PASSWORD_KEY=$(New-RandomSecret)"
         if ($keyLineIndex -ge 0) { $lines[$keyLineIndex] = $keyLine } else { $lines += $keyLine }
         Write-Host "Generated the local document password encryption key in LIG-Deployment\.env.secret."
     }
     if ($legacyKeyLineIndex -ge 0) { $lines = @($lines | Where-Object { $_ -notmatch '^\s*LIG_PDF_PASSWORD_KEY=' }) }
     if (-not ($lines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_KEY_ID=' })) {
-        $lines += "LIG_DOCUMENT_PASSWORD_KEY_ID=primary"
+        $existingKeyId = Get-ExistingContainerEnvValue "LIG_DOCUMENT_PASSWORD_KEY_ID"
+        $lines += "LIG_DOCUMENT_PASSWORD_KEY_ID=$(if ($existingKeyId) { $existingKeyId } else { 'primary' })"
     }
     if (-not ($lines | Where-Object { $_ -match '^\s*LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS=' })) {
-        $lines += "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS="
+        $existingPreviousKeys = Get-ExistingContainerEnvValue "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS"
+        $lines += "LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS=$existingPreviousKeys"
     }
     $ocrTokenLineIndex = -1
     for ($index = 0; $index -lt $lines.Count; $index++) {
@@ -178,11 +221,24 @@ function Ensure-LigSecrets {
     }
     $ocrToken = if ($ocrTokenLineIndex -ge 0) { ($lines[$ocrTokenLineIndex] -split '=', 2)[1].Trim() } else { "" }
     if ([string]::IsNullOrWhiteSpace($ocrToken) -or $ocrToken -eq "replace-with-a-random-internal-token") {
+        $existingOcrToken = Get-ExistingContainerEnvValue "PADDLEOCR_INTERNAL_TOKEN"
+        if ($existingOcrToken) {
+            $ocrTokenLine = "PADDLEOCR_INTERNAL_TOKEN=$existingOcrToken"
+            if ($ocrTokenLineIndex -ge 0) { $lines[$ocrTokenLineIndex] = $ocrTokenLine } else { $lines += $ocrTokenLine; $ocrTokenLineIndex = $lines.Count - 1 }
+            $ocrToken = $existingOcrToken
+            Write-Host "Recovered the existing internal PaddleOCR token from the LIG runtime."
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($ocrToken) -or $ocrToken -eq "replace-with-a-random-internal-token") {
         $ocrTokenLine = "PADDLEOCR_INTERNAL_TOKEN=$(New-RandomSecret)"
         if ($ocrTokenLineIndex -ge 0) { $lines[$ocrTokenLineIndex] = $ocrTokenLine } else { $lines += $ocrTokenLine }
         Write-Host "Generated the internal PaddleOCR bearer token in LIG-Deployment\.env.secret."
     }
     [IO.File]::WriteAllLines($secretFile, $lines, [Text.UTF8Encoding]::new($false))
+    if (-not (Test-Path -LiteralPath $persistentStateDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $persistentStateDirectory -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $secretFile -Destination $persistentSecretFile -Force
 }
 
 function Assert-LigConfiguration {
@@ -193,13 +249,26 @@ function Assert-LigConfiguration {
     if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1) {
         throw "TASK_EXECUTOR_WORKERS must be a positive integer. Current value: $workerValue"
     }
-    foreach ($settingName in @("MAX_CONTENT_LENGTH", "DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_UPLOAD_BYTES", "PADDLEOCR_MAX_PDF_PAGES", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS")) {
+    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS", "MAX_CONCURRENT_TASKS", "MAX_CONCURRENT_CHUNK_BUILDERS", "TASK_LEASE_SECONDS", "LIG_INGESTION_MEMORY_RESERVE_BYTES", "LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", "PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL")) {
         $settingValue = Get-ConfigurationValue $configuration $settingName
         if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
         [long]$parsed = 0
         if (-not [long]::TryParse($settingValue, [ref]$parsed) -or $parsed -lt 1) {
             throw "$settingName must be a positive integer. Current value: $settingValue"
         }
+    }
+    foreach ($settingName in @("MAX_CONTENT_LENGTH", "QUART_BODY_TIMEOUT", "LIG_DOCUMENT_MAX_BYTES", "PADDLEOCR_MAX_UPLOAD_BYTES", "PADDLEOCR_MAX_PDF_PAGES", "TASK_MAX_CRASH_RETRIES")) {
+        $settingValue = Get-ConfigurationValue $configuration $settingName
+        if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
+        [long]$parsed = 0
+        if (-not [long]::TryParse($settingValue, [ref]$parsed) -or $parsed -lt 0) {
+            throw "$settingName must be zero (unlimited) or a positive integer. Current value: $settingValue"
+        }
+    }
+    $memoryPercentValue = Get-ConfigurationValue $configuration "LIG_INGESTION_MEMORY_PERCENT" "25"
+    [int]$memoryPercent = 0
+    if (-not [int]::TryParse($memoryPercentValue, [ref]$memoryPercent) -or $memoryPercent -lt 1 -or $memoryPercent -gt 100) {
+        throw "LIG_INGESTION_MEMORY_PERCENT must be an integer from 1 through 100. Current value: $memoryPercentValue"
     }
 }
 
@@ -267,11 +336,28 @@ function Invoke-Diagnostics {
 
     $timingSamples = @()
     $recentErrors = @()
-    $ragflowContainer = $containerNames | Where-Object { $_ -match 'ragflow-(cpu|gpu)' } | Select-Object -First 1
+    $ragflowContainer = $containerNames | Where-Object { $_ -match 'ragflow-worker-(cpu|gpu)' } | Select-Object -First 1
+    if (-not $ragflowContainer) {
+        $ragflowContainer = $containerNames | Where-Object { $_ -match 'ragflow-(cpu|gpu)' } | Select-Object -First 1
+    }
     $ragflowHostname = $null
+    $ragflowWorkerId = $null
     if ($ragflowContainer) {
         $inspectResult = Invoke-DockerCapture -Arguments @("inspect", "--format", "{{.Config.Hostname}}", $ragflowContainer) -AllowFailure
         $ragflowHostname = $inspectResult.Lines | Select-Object -Last 1
+        $commandResult = Invoke-DockerCapture -Arguments @("inspect", "--format", "{{json .Config.Cmd}}", $ragflowContainer) -AllowFailure
+        if ($commandResult.ExitCode -eq 0) {
+            try {
+                $containerCommand = @($commandResult.Lines | Select-Object -Last 1 | ConvertFrom-Json)
+                $hostIdArgument = $containerCommand | Where-Object { $_ -like '--host-id=*' } | Select-Object -First 1
+                if ($hostIdArgument) {
+                    $ragflowWorkerId = $hostIdArgument.Substring('--host-id='.Length)
+                }
+            }
+            catch {
+                $ragflowWorkerId = $null
+            }
+        }
         $logsResult = Invoke-DockerCapture -Arguments @("logs", "--tail", "2000", $ragflowContainer) -AllowFailure
         $logLines = $logsResult.Lines
         $timingSamples = @($logLines | Where-Object {
@@ -287,7 +373,11 @@ function Invoke-Diagnostics {
         $heartbeats = @($serviceHealth.task_executor_heartbeats.PSObject.Properties | ForEach-Object {
             [pscustomobject]@{
                 Worker = $_.Name
-                CurrentContainer = [bool]($ragflowHostname -and $_.Name -match [regex]::Escape($ragflowHostname))
+                CurrentContainer = [bool](
+                    ($ragflowWorkerId -and $_.Name -match "_$([regex]::Escape($ragflowWorkerId))_") -or
+                    ($ragflowHostname -and $_.Name -match [regex]::Escape($ragflowHostname)) -or
+                    $_.Name -match '^task_executor(?:_[a-z0-9-]+)*_lig-(cpu|gpu)-worker_'
+                )
                 SamplesInLast30Minutes = @($_.Value).Count
             }
         })

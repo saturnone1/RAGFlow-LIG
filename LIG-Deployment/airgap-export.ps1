@@ -267,5 +267,6 @@ $manifest = [pscustomobject]@{
     files = @($records)
 }
 $manifestPath = Join-Path $destinationPath "manifest.json"
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+$manifestJson = $manifest | ConvertTo-Json -Depth 5
+[IO.File]::WriteAllText($manifestPath, $manifestJson, [Text.UTF8Encoding]::new($false))
 $manifest | ConvertTo-Json -Depth 5

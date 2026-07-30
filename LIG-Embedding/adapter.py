@@ -12,13 +12,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 UPSTREAM = os.environ.get("EMBEDDING_UPSTREAM_URL", "http://qwen3-embedding-tei:80").rstrip("/")
 PORT = int(os.environ.get("EMBEDDING_ADAPTER_PORT", "8080"))
 UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("EMBEDDING_UPSTREAM_TIMEOUT_SECONDS", "300"))
+MAX_CONCURRENT_REQUESTS = max(1, int(os.environ.get("EMBEDDING_MAX_CONCURRENT_REQUESTS", "1")))
 INSTRUCTION = os.environ.get(
     "EMBEDDING_QUERY_INSTRUCTION",
     "Given a user question, retrieve relevant passages from internal company documents that answer the question",
 ).strip()
 MODEL = "Qwen/Qwen3-Embedding-0.6B"
 state_lock = threading.Lock()
+upstream_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
 state = {
+    "queued_requests": 0,
     "active_requests": 0,
     "completed_requests": 0,
     "failed_requests": 0,
@@ -110,14 +113,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         started_at = time.monotonic()
-        with state_lock:
-            state["active_requests"] += 1
+        acquired_slot = False
         succeeded = False
         error_detail = None
         try:
             payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             payload = prepare_embed_payload(payload)
             encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            with state_lock:
+                state["queued_requests"] += 1
+            upstream_slots.acquire()
+            acquired_slot = True
+            with state_lock:
+                state["queued_requests"] -= 1
+                state["active_requests"] += 1
             status, body, content_type = _request_upstream("/embed", encoded, "POST")
             succeeded = status < 400 and self._respond(status, body, content_type)
         except (ValueError, json.JSONDecodeError) as error:
@@ -129,7 +138,8 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             elapsed = round(time.monotonic() - started_at, 3)
             with state_lock:
-                state["active_requests"] -= 1
+                if acquired_slot:
+                    state["active_requests"] -= 1
                 state["last_request_seconds"] = elapsed
                 if succeeded:
                     state["completed_requests"] += 1
@@ -137,6 +147,8 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     state["failed_requests"] += 1
                     state["last_error"] = error_detail or "upstream or client response failed"
+            if acquired_slot:
+                upstream_slots.release()
 
 
 if __name__ == "__main__":

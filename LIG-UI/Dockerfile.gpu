@@ -5,7 +5,8 @@ USER root
 
 # ONNX Runtime 1.23.2 uses CUDA 12.8 and cuDNN 9. Keep every NVIDIA wheel
 # pinned so the air-gap image is reproducible and does not drift with PyPI.
-RUN uv pip install --python /ragflow/.venv/bin/python --no-cache \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /ragflow/.venv/bin/python \
         nvidia-cuda-nvrtc-cu12==12.8.93 \
         nvidia-cuda-runtime-cu12==12.8.90 \
         nvidia-cublas-cu12==12.8.4.1 \

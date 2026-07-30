@@ -20,4 +20,4 @@ LABEL org.opencontainers.image.title="LIG Qwen3 Embedding 0.6B (TEI CPU)" \
       org.opencontainers.image.licenses="Apache-2.0" \
       ai.lig.model.safetensors.sha256="0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"
 
-CMD ["--model-id", "/model", "--served-model-name", "Qwen/Qwen3-Embedding-0.6B", "--port", "80", "--dtype", "float16", "--tokenization-workers", "2", "--max-batch-tokens", "2048", "--auto-truncate", "--json-output"]
+CMD ["--model-id", "/model", "--served-model-name", "Qwen/Qwen3-Embedding-0.6B", "--port", "80", "--tokenization-workers", "2", "--max-concurrent-requests", "8", "--max-batch-requests", "4", "--max-batch-tokens", "2048", "--auto-truncate", "--json-output"]

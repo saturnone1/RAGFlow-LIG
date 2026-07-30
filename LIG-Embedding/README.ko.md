@@ -14,7 +14,7 @@ RAGFlow의 기본 설치와 분리된 CPU 임베딩 서비스입니다. `Qwen/Qw
 
 어댑터는 RAGFlow가 단일 문자열로 보내는 검색 질의에만 Qwen 권장 형식의 검색 지시문을 추가합니다. 배열로 보내는 문서 청크는 변경하지 않습니다. RAGFlow 원본 코드는 수정하지 않습니다.
 
-CPU 추론의 배치 크기는 `.env.lig`의 `EMBEDDING_BATCH_SIZE`로 조정합니다. RAGFlow의 HuggingFace 공급자 요청 제한시간은 `HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS`, 어댑터에서 TEI로 향하는 제한시간은 `EMBEDDING_UPSTREAM_TIMEOUT_SECONDS`로 조정할 수 있으며 둘 다 기본값은 300초입니다. 따라서 긴 청크나 병렬 작업의 CPU 대기 시간이 60초를 넘더라도 요청이 중단되지 않습니다. `/health`의 `requests` 항목에서 진행 중 요청, 성공·실패·클라이언트 연결 종료 및 최근 요청 시간을 확인할 수 있습니다.
+CPU 추론의 배치 크기는 `.env.lig`의 `EMBEDDING_BATCH_SIZE`로 조정합니다. RAGFlow의 HuggingFace 공급자 요청 제한시간은 `HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS`, 어댑터에서 TEI로 향하는 제한시간은 `EMBEDDING_UPSTREAM_TIMEOUT_SECONDS`로 조정할 수 있으며 둘 다 기본값은 300초입니다. 어댑터는 기본적으로 TEI 요청을 하나씩 전달하고 나머지는 거부하지 않고 대기시켜 CPU 백엔드 큐 고갈과 재시작을 방지합니다. 필요하면 `EMBEDDING_MAX_CONCURRENT_REQUESTS`를 조정할 수 있습니다. `/health`의 `requests` 항목에서 대기·진행 중 요청, 성공·실패·클라이언트 연결 종료 및 최근 요청 시간을 확인할 수 있습니다.
 
 로컬 개발 배포에서는 다음 명령으로 이미지를 빌드한 뒤 선택형 서비스를 시작합니다.
 

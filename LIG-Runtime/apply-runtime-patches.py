@@ -24,6 +24,13 @@ EXPECTED_NAIVE_PARSER_SHA256 = "99a168e1713321f64f3fb8b1834c1f76f549804f540d0800
 EXPECTED_PICTURE_PARSER_SHA256 = "2e67f314adb4375d613345d2e6ba19d4079feaf78027b8a713d5c2183d4dc553"
 EXPECTED_REFACTORED_CHUNK_SERVICE_SHA256 = "c2fc8e3da4f88214b08893ca02793a6984db4ce3b38cd30e4631f5c4b45648c2"
 EXPECTED_EMAIL_PARSER_SHA256 = "bb301146d2225e3cf47b32e80b3b6058ca549973ab4903947cf9e2576ca1bcad"
+EXPECTED_REDIS_CONN_SHA256 = "aaa61fde04ab654da5dfb519cebde91e60436081185e4a1a07d38ed187596489"
+EXPECTED_TENANT_MODEL_SERVICE_SHA256 = "26352a0b1b4244c316691d8f02e5131e932ffe87c8c60ee3c4674ca0c9f6d33e"
+EXPECTED_API_APP_SHA256 = "a69fbdf8fd18cedde60fcd0245e558ebef8198039aad532576d28a7f7726ba27"
+EXPECTED_ADMIN_SERVER_SHA256 = "399040a01af13adf69d49eb444d62fe508ae212cf8d095f620c12f37e09bb1f5"
+EXPECTED_EMBEDDING_SERVICE_SHA256 = "7937e5de77f8badc953fb476b0f81e986532a9d8f8da17de10818182ec9a3ea2"
+EXPECTED_DATAFLOW_SERVICE_SHA256 = "b6c0b874a555d27cce7989a93644b1cb171575d3b895d4b246d85baececc7e62"
+EXPECTED_OCR_MODEL_SHA256 = "9901a48f98423fc5a765985595dbc31cd246b5f76869eac9603d74c3e559b627"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
 NEW_TIMEOUT = (
     'headers={"Content-Type": "application/json"}, '
@@ -46,14 +53,16 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 18:
+    if len(sys.argv) != 25:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
             "<document_api_service.py> <file_service.py> <task_service.py> "
             "<pipeline_parser.py> <pdf_chunk_metadata.py> <chunk_api.py> <file_utils.py> "
             "<refactored_chunk_builder.py> <refactored_task_handler.py> <naive.py> "
-            "<picture.py> <refactored_chunk_service.py> <email.py>"
+            "<picture.py> <refactored_chunk_service.py> <email.py> "
+            "<redis_conn.py> <tenant_model_service.py> <api_apps_init.py> <admin_server.py> "
+            "<embedding_service.py> <dataflow_service.py> <ocr_model.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -69,9 +78,55 @@ def main() -> None:
     if text.count(OLD_TIMEOUT) != 2:
         raise SystemExit("Expected exactly two HuggingFace embedding timeout sites")
 
-    embedding_target.write_text(
-        text.replace(OLD_TIMEOUT, NEW_TIMEOUT), encoding="utf-8"
+    text = text.replace(OLD_TIMEOUT, NEW_TIMEOUT)
+    text = replace_once(text, "import threading\n", "import threading\nimport time\n", "embedding retry time import")
+    text = replace_once(
+        text,
+        '        self.base_url = base_url or "http://127.0.0.1:8080"\n\n'
+        "    def encode(self, texts: list):\n",
+        '        self.base_url = base_url or "http://127.0.0.1:8080"\n\n'
+        "    def _request(self, payload, max_retries=None):\n"
+        "        if max_retries is None:\n"
+        '            max_retries = max(0, int(os.environ.get("HUGGINGFACE_EMBEDDING_MAX_RETRIES", "0")))\n'
+        "        attempt = 0\n"
+        "        while True:\n"
+        "            try:\n"
+        "                response = requests.post(\n"
+        '                    f"{self.base_url}/embed",\n'
+        "                    json=payload,\n"
+        '                    headers={"Content-Type": "application/json"},\n'
+        '                    timeout=float(os.environ.get("HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS", "300")),\n'
+        "                )\n"
+        "                if response.status_code not in (408, 429) and response.status_code < 500:\n"
+        "                    return response\n"
+        '                detail = f"HTTP {response.status_code}"\n'
+        "                if max_retries and attempt >= max_retries:\n"
+        "                    return response\n"
+        "            except requests.RequestException as error:\n"
+        "                detail = str(error)\n"
+        "                if max_retries and attempt >= max_retries:\n"
+        '                    raise ModelException(f"Embedding service unavailable after retries: {error}", retryable=True) from error\n'
+        "            attempt += 1\n"
+        "            delay = min(30, 2 ** min(attempt - 1, 5))\n"
+        '            logger.warning("Embedding service unavailable (%s); retrying in %ss", detail, delay)\n'
+        "            time.sleep(delay)\n\n"
+        "    def encode(self, texts: list):\n",
+        "resilient HuggingFace embedding request",
     )
+    text = replace_once(
+        text,
+        '        response = requests.post(f"{self.base_url}/embed", json={"inputs": texts}, headers={"Content-Type": "application/json"}, timeout=float(os.environ.get("HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS", "300")))\n',
+        '        response = self._request({"inputs": texts})\n',
+        "HuggingFace document embedding retry",
+    )
+    text = replace_once(
+        text,
+        '        response = requests.post(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"}, timeout=float(os.environ.get("HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS", "300")))\n',
+        '        query_retries = max(0, int(os.environ.get("HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES", "3")))\n'
+        '        response = self._request({"inputs": text}, query_retries)\n',
+        "HuggingFace query embedding retry",
+    )
+    embedding_target.write_text(text, encoding="utf-8")
 
     paddleocr_target = Path(sys.argv[2])
     source = paddleocr_target.read_bytes()
@@ -147,6 +202,37 @@ def main() -> None:
         "    def _build_payload",
         "PaddleOCR PDF slicing helper",
     )
+    text = replace_once(
+        text,
+        "            result_resp = requests.get(result_json_url, timeout=_remaining())\n"
+        "            result_resp.raise_for_status()\n",
+        "            result_resp = requests.get(result_json_url, timeout=_remaining(), stream=True)\n"
+        "            result_resp.raise_for_status()\n",
+        "streaming PaddleOCR result download",
+    )
+    text = replace_once(
+        text,
+        "        jsonl_lines = result_resp.text.strip().split(\"\\n\")\n"
+        "        jsonl_data = []\n"
+        "        for line in jsonl_lines:\n"
+        "            line = line.strip()\n"
+        "            if line:\n"
+        "                try:\n"
+        "                    jsonl_data.append(json.loads(line))\n"
+        "                except ValueError as exc:\n"
+        "                    raise RuntimeError(f\"[PaddleOCR] result JSONL parse error: {exc}\")\n",
+        "        jsonl_data = []\n"
+        "        try:\n"
+        "            for raw_line in result_resp.iter_lines(decode_unicode=True):\n"
+        "                line = (raw_line or \"\").strip()\n"
+        "                if line:\n"
+        "                    jsonl_data.append(json.loads(line))\n"
+        "        except ValueError as exc:\n"
+        "            raise RuntimeError(f\"[PaddleOCR] result JSONL parse error: {exc}\") from exc\n"
+        "        finally:\n"
+        "            result_resp.close()\n",
+        "incremental PaddleOCR JSONL parsing",
+    )
     paddleocr_target.write_text(text, encoding="utf-8")
 
     task_executor_target = Path(sys.argv[3])
@@ -164,11 +250,34 @@ def main() -> None:
     text = text.replace(OLD_EMBEDDING_PROGRESS, NEW_EMBEDDING_PROGRESS)
     text = replace_once(
         text,
+        "    @timeout(60)\n"
+        "    def batch_encode(txts):\n",
+        '    @timeout(float(os.environ.get("HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS", "300")))\n'
+        "    def batch_encode(txts):\n",
+        "legacy document embedding timeout",
+    )
+    text = replace_once(
+        text,
+        "            @timeout(60)\n"
+        "            def batch_encode(txts):\n",
+        '            @timeout(float(os.environ.get("HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS", "300")))\n'
+        "            def batch_encode(txts):\n",
+        "legacy enrichment embedding timeout",
+    )
+    text = replace_once(
+        text,
+        '    if task["size"] > settings.DOC_MAXIMUM_SIZE:\n',
+        '    document_max_bytes = int(os.environ.get("LIG_DOCUMENT_MAX_BYTES", "0"))\n'
+        '    if document_max_bytes > 0 and task["size"] > document_max_bytes:\n',
+        "optional legacy executor document-size limit",
+    )
+    text = replace_once(
+        text,
         '        set_progress(task["id"], prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n'
         '        get_recording_context().record("file_size_exceeded", True)\n'
         "        return []\n",
         '        get_recording_context().record("file_size_exceeded", True)\n'
-        '        raise ValueError("File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n',
+        '        raise ValueError("File size exceeds configured LIG_DOCUMENT_MAX_BYTES (%dMb)" % (int(document_max_bytes / 1024 / 1024)))\n',
         "legacy executor oversized-file failure",
     )
     text = replace_once(
@@ -207,9 +316,112 @@ def main() -> None:
     )
     text = replace_once(
         text,
+        "            ret = PipelineOperationLogService.record_pipeline_operation(\n"
+        "                document_id=task[\"doc_id\"], pipeline_id=\"\", task_type=pipeline_task_type, task_id=task_id, referred_document_id=referred_document_id\n"
+        "            )\n"
+        "            get_recording_context().save_func_return_value(\"PipelineOperationLogService.record_pipeline_operation\", ret)\n",
+        "            try:\n"
+        "                ret = PipelineOperationLogService.record_pipeline_operation(\n"
+        "                    document_id=task[\"doc_id\"], pipeline_id=\"\", task_type=pipeline_task_type, task_id=task_id, referred_document_id=referred_document_id\n"
+        "                )\n"
+        "                get_recording_context().save_func_return_value(\"PipelineOperationLogService.record_pipeline_operation\", ret)\n"
+        "            except Exception:\n"
+        "                logging.exception(\"Failed to record pipeline operation for task %s\", task_id)\n",
+        "task lease cleanup survives operation logging failure",
+    )
+    text = replace_once(
+        text,
         '            logging.info(f"GraphRAG task result for task {task}:\\n{result}")',
         '            logging.info(f"GraphRAG task result for task {task.get(\'id\', \'\')}:\\n{result}")',
         "GraphRAG task log secret redaction",
+    )
+    text = replace_once(
+        text,
+        'WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))\n'
+        "stop_event = threading.Event()\n",
+        'WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))\n'
+        'TASK_LEASE_SECONDS = int(os.environ.get("TASK_LEASE_SECONDS", "180"))\n'
+        'TASK_LEASE_REFRESH_SECONDS = max(5, min(60, TASK_LEASE_SECONDS // 3))\n'
+        "stop_event = threading.Event()\n",
+        "task lease configuration",
+    )
+    if text.count("        return None, None\n") != 4:
+        raise SystemExit("Expected four task collector empty returns")
+    text = text.replace("        return None, None\n", "        return None, None, None\n", 3)
+    text = replace_once(
+        text,
+        "    canceled = False\n"
+        "    if msg.get(\"doc_id\", \"\") in [GRAPH_RAPTOR_FAKE_DOC_ID, CANVAS_DEBUG_DOC_ID]:\n",
+        "    task_lease = RedisDistributedLock(\n"
+        "        f\"task_lease:{msg['id']}\", timeout=TASK_LEASE_SECONDS, blocking_timeout=0\n"
+        "    )\n"
+        "    try:\n"
+        "        lease_acquired = task_lease.acquire()\n"
+        "    except Exception:\n"
+        "        logging.exception(\"Failed to acquire task lease for %s\", msg['id'])\n"
+        "        lease_acquired = False\n"
+        "    if not lease_acquired:\n"
+        "        logging.info(\"Task %s is already running; leaving the message pending\", msg['id'])\n"
+        "        return redis_msg, None, None\n\n"
+        "    canceled = False\n"
+        "    if msg.get(\"doc_id\", \"\") in [GRAPH_RAPTOR_FAKE_DOC_ID, CANVAS_DEBUG_DOC_ID]:\n",
+        "task lease acquisition before retry accounting",
+    )
+    text = replace_once(
+        text,
+        "        redis_msg.ack()\n"
+        "        return None, None\n\n"
+        "    task_type = msg.get(\"task_type\", \"\")\n",
+        "        redis_msg.ack()\n"
+        "        task_lease.release()\n"
+        "        return None, None, None\n\n"
+        "    task_type = msg.get(\"task_type\", \"\")\n",
+        "release lease for terminal queue messages",
+    )
+    text = replace_once(
+        text,
+        "    return redis_msg, task\n\n\n"
+        "async def get_storage_binary(bucket, name):\n",
+        "    return redis_msg, task, task_lease\n\n\n"
+        "async def get_storage_binary(bucket, name):\n",
+        "return acquired task lease",
+    )
+    text = replace_once(
+        text,
+        "async def handle_task():\n"
+        "    global DONE_TASKS, FAILED_TASKS\n"
+        "    redis_msg, task = await collect()\n",
+        "async def _refresh_task_lease(task_lease, task_id):\n"
+        "    while True:\n"
+        "        await asyncio.sleep(TASK_LEASE_REFRESH_SECONDS)\n"
+        "        if not task_lease.refresh():\n"
+        "            logging.warning(\"Task lease refresh failed for %s; will retry\", task_id)\n\n\n"
+        "async def handle_task():\n"
+        "    global DONE_TASKS, FAILED_TASKS\n"
+        "    redis_msg, task, task_lease = await collect()\n",
+        "task lease heartbeat",
+    )
+    text = replace_once(
+        text,
+        "    task_id = task[\"id\"]\n"
+        "    try:\n",
+        "    task_id = task[\"id\"]\n"
+        "    lease_refresh_task = asyncio.create_task(_refresh_task_lease(task_lease, task_id))\n"
+        "    try:\n",
+        "start task lease heartbeat",
+    )
+    text = replace_once(
+        text,
+        "    redis_msg.ack()\n\n\n"
+        "async def get_server_ip() -> str:\n",
+        "    lease_refresh_task.cancel()\n"
+        "    await asyncio.gather(lease_refresh_task, return_exceptions=True)\n"
+        "    try:\n"
+        "        task_lease.release()\n"
+        "    finally:\n"
+        "        redis_msg.ack()\n\n\n"
+        "async def get_server_ip() -> str:\n",
+        "release task lease before acknowledging",
     )
     task_executor_target.write_text(text, encoding="utf-8")
 
@@ -495,8 +707,52 @@ def main() -> None:
     text = replace_once(
         text,
         "from common.misc_utils import get_uuid\n",
-        "from common.misc_utils import get_uuid\nfrom common.parser_config_utils import normalize_layout_recognizer\n",
+        "from common.misc_utils import get_uuid\n"
+        "from common.parser_config_utils import normalize_layout_recognizer\n"
+        "from lig_runtime.resource_control import adaptive_pdf_task_page_size\n",
         "task service layout recognizer import",
+    )
+    text = replace_once(
+        text,
+        "TASK_MAX_LOG_LENGTH = int(os.environ.get(\"TASK_MAX_LOG_LENGTH\", 3000))  # TEXT MAX is 64 KiB bytes!\n",
+        "TASK_MAX_LOG_LENGTH = int(os.environ.get(\"TASK_MAX_LOG_LENGTH\", 3000))  # TEXT MAX is 64 KiB bytes!\n"
+        "TASK_MAX_CRASH_RETRIES = int(os.environ.get(\"TASK_MAX_CRASH_RETRIES\", \"0\"))\n",
+        "configurable crash retry policy",
+    )
+    text = replace_once(
+        text,
+        "            cls.model.retry_count,\n"
+        "            Document.kb_id,\n",
+        "            cls.model.retry_count,\n"
+        "            cls.model.progress,\n"
+        "            Document.kb_id,\n",
+        "completed task progress selection",
+    )
+    text = replace_once(
+        text,
+        "        doc = docs[0]\n\n"
+        "        msg = f\"\\n{datetime.now().strftime('%H:%M:%S')} Task has been received.\"\n",
+        "        doc = docs[0]\n"
+        "        if doc[\"progress\"] >= 1:\n"
+        "            return None\n\n"
+        "        msg = f\"\\n{datetime.now().strftime('%H:%M:%S')} Task has been received.\"\n",
+        "completed task duplicate suppression",
+    )
+    text = replace_once(
+        text,
+        "        if doc[\"retry_count\"] >= 3:\n"
+        "            msg = \"\\nERROR: Task is abandoned after 3 times attempts.\"\n"
+        "            prog = -1\n",
+        "        if TASK_MAX_CRASH_RETRIES > 0 and doc[\"retry_count\"] >= TASK_MAX_CRASH_RETRIES:\n"
+        "            msg = f\"\\nERROR: Task is abandoned after {TASK_MAX_CRASH_RETRIES} crash retries.\"\n"
+        "            prog = -1\n",
+        "unlimited default crash recovery",
+    )
+    text = replace_once(
+        text,
+        "        if docs[0][\"retry_count\"] >= 3:\n",
+        "        if TASK_MAX_CRASH_RETRIES > 0 and docs[0][\"retry_count\"] >= TASK_MAX_CRASH_RETRIES:\n",
+        "configurable crash retry enforcement",
     )
     text = replace_once(
         text,
@@ -528,7 +784,8 @@ def main() -> None:
         '        layout_recognizer, _ = normalize_layout_recognizer(doc["parser_config"].get("layout_recognize", "DeepDOC"))\n'
         '        if layout_recognizer == "PaddleOCR":\n'
         '            paddleocr_page_size = max(1, int(os.environ.get("PADDLEOCR_TASK_PAGE_SIZE", "12")))\n'
-        '            page_size = min(page_size, paddleocr_page_size)\n',
+        '            page_size = min(page_size, paddleocr_page_size)\n'
+        '        page_size = adaptive_pdf_task_page_size(page_size)\n',
         "PaddleOCR task page size application",
     )
     text = replace_once(
@@ -950,11 +1207,24 @@ def main() -> None:
     text = chunk_service_target.read_text(encoding="utf-8")
     text = replace_once(
         text,
+        "import logging\n",
+        "import logging\nimport os\n",
+        "refactored executor environment import",
+    )
+    text = replace_once(
+        text,
+        "        if ctx.size > settings.DOC_MAXIMUM_SIZE:\n",
+        '        document_max_bytes = int(os.environ.get("LIG_DOCUMENT_MAX_BYTES", "0"))\n'
+        "        if document_max_bytes > 0 and ctx.size > document_max_bytes:\n",
+        "optional refactored executor document-size limit",
+    )
+    text = replace_once(
+        text,
         '            self._progress(prog=-1, msg="File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n'
         '            self._task_context.recording_context.record("file_size_exceeded", True)\n'
         "            return []\n",
         '            self._task_context.recording_context.record("file_size_exceeded", True)\n'
-        '            raise ValueError("File size exceeds( <= %dMb )" % (int(settings.DOC_MAXIMUM_SIZE / 1024 / 1024)))\n',
+        '            raise ValueError("File size exceeds configured LIG_DOCUMENT_MAX_BYTES (%dMb)" % (int(document_max_bytes / 1024 / 1024)))\n',
         "refactored executor oversized-file failure",
     )
     chunk_service_target.write_text(text, encoding="utf-8")
@@ -976,6 +1246,139 @@ def main() -> None:
         "email parser defaults",
     )
     email_parser_target.write_text(text, encoding="utf-8")
+
+    redis_conn_target = checked_target(Path(sys.argv[18]), EXPECTED_REDIS_CONN_SHA256, "rag/utils/redis_conn.py")
+    text = redis_conn_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    def release(self):\n"
+        "        REDIS_CONN.delete_if_equal(self.lock_key, self.lock_value)\n",
+        "    def refresh(self):\n"
+        "        try:\n"
+        "            return bool(self.lock.reacquire())\n"
+        "        except Exception:\n"
+        "            logging.exception(\"Failed to refresh Redis lock %s\", self.lock_key)\n"
+        "            return False\n\n"
+        "    def release(self):\n"
+        "        REDIS_CONN.delete_if_equal(self.lock_key, self.lock_value)\n",
+        "renewable task lease support",
+    )
+    redis_conn_target.write_text(text, encoding="utf-8")
+
+    tenant_model_target = checked_target(
+        Path(sys.argv[19]),
+        EXPECTED_TENANT_MODEL_SERVICE_SHA256,
+        "api/db/joint_services/tenant_model_service.py",
+    )
+    text = tenant_model_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    api_key = json.dumps(config)\n"
+        "    instance_obj = TenantModelInstanceService.get_by_provider_id_and_api_key(provider_obj.id, api_key)\n"
+        "    if not instance_obj:\n"
+        "        instance_obj = TenantModelInstanceService.create_instance(\n"
+        "            provider_id=provider_obj.id,\n"
+        "            instance_name=model_name,\n"
+        "            api_key=api_key,\n"
+        "            extra=\"{}\",\n"
+        "        )\n\n",
+        "    api_key = json.dumps(config)\n"
+        "    instance_obj = TenantModelInstanceService.get_by_provider_id_and_instance_name(provider_obj.id, model_name)\n"
+        "    if not instance_obj:\n"
+        "        TenantModelInstanceService.create_instance(\n"
+        "            provider_id=provider_obj.id,\n"
+        "            instance_name=model_name,\n"
+        "            api_key=api_key,\n"
+        "            extra=\"{}\",\n"
+        "        )\n"
+        "        instance_obj = TenantModelInstanceService.get_by_provider_id_and_instance_name(provider_obj.id, model_name)\n"
+        "        if not instance_obj:\n"
+        "            raise RuntimeError(f\"Failed to create {provider_name} model instance for tenant {tenant_id}\")\n"
+        "    for env_instance in TenantModelInstanceService.get_all_by_provider_id(provider_obj.id):\n"
+        "        if env_instance.api_key != api_key:\n"
+        "            TenantModelInstanceService.update_by_id(env_instance.id, {\"api_key\": api_key})\n\n",
+        "environment-managed OCR provider refresh",
+    )
+    tenant_model_target.write_text(text, encoding="utf-8")
+
+    api_app_target = checked_target(Path(sys.argv[20]), EXPECTED_API_APP_SHA256, "api/apps/__init__.py")
+    text = api_app_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        'app.config["BODY_TIMEOUT"] = int(os.environ.get("QUART_BODY_TIMEOUT", 600))\n',
+        'body_timeout = int(os.environ.get("QUART_BODY_TIMEOUT", "0"))\n'
+        'app.config["BODY_TIMEOUT"] = body_timeout or None\n',
+        "unlimited slow upload body timeout support",
+    )
+    text = replace_once(
+        text,
+        'app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_CONTENT_LENGTH", 1024 * 1024 * 1024))\n',
+        'max_content_length = int(os.environ.get("MAX_CONTENT_LENGTH", "0"))\n'
+        'app.config["MAX_CONTENT_LENGTH"] = max_content_length or None\n',
+        "unlimited HTTP document upload support",
+    )
+    api_app_target.write_text(text, encoding="utf-8")
+
+    admin_server_target = checked_target(Path(sys.argv[21]), EXPECTED_ADMIN_SERVER_SHA256, "admin/server/admin_server.py")
+    text = admin_server_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        '    app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_CONTENT_LENGTH", 1024 * 1024 * 1024))\n',
+        '    max_content_length = int(os.environ.get("MAX_CONTENT_LENGTH", "0"))\n'
+        '    app.config["MAX_CONTENT_LENGTH"] = max_content_length or None\n',
+        "unlimited admin upload support",
+    )
+    admin_server_target.write_text(text, encoding="utf-8")
+
+    embedding_service_target = checked_target(
+        Path(sys.argv[22]),
+        EXPECTED_EMBEDDING_SERVICE_SHA256,
+        "rag/svr/task_executor_refactor/embedding_service.py",
+    )
+    text = embedding_service_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        '                self._task_context.progress_cb(prog=0.7 + 0.2 * (i + 1) / len(contents), msg="")\n',
+        "                self._task_context.progress_cb(\n"
+        "                    prog=0.7 + 0.2 * min(i + self._embedding_batch_size, len(contents)) / len(contents),\n"
+        '                    msg="",\n'
+        "                )\n",
+        "refactored embedding batch progress",
+    )
+    embedding_service_target.write_text(text, encoding="utf-8")
+
+    dataflow_service_target = checked_target(
+        Path(sys.argv[23]),
+        EXPECTED_DATAFLOW_SERVICE_SHA256,
+        "rag/svr/task_executor_refactor/dataflow_service.py",
+    )
+    text = dataflow_service_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    @timeout(60)\n"
+        "    async def _embed_chunks(self, chunks: List[Dict], token_consumption: int) -> Tuple[Optional[List[Dict]], int]:\n",
+        "    async def _embed_chunks(self, chunks: List[Dict], token_consumption: int) -> Tuple[Optional[List[Dict]], int]:\n",
+        "dataflow aggregate embedding timeout removal",
+    )
+    dataflow_service_target.write_text(text, encoding="utf-8")
+
+    ocr_model_target = checked_target(Path(sys.argv[24]), EXPECTED_OCR_MODEL_SHA256, "rag/llm/ocr_model.py")
+    text = ocr_model_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "        def _resolve_config(key: str, env_key: str, default=\"\"):\n"
+        "            # lower-case keys (UI), upper-case PADDLEOCR_* (env auto-provision), env vars\n"
+        "            return config.get(key, config.get(env_key, os.environ.get(env_key, default)))\n",
+        "        env_managed = model_name == \"paddleocr-from-env\"\n\n"
+        "        def _resolve_config(key: str, env_key: str, default=\"\"):\n"
+        "            # The bundled environment-managed provider follows the current\n"
+        "            # container secret even when an older value remains in the database.\n"
+        "            if env_managed and os.environ.get(env_key):\n"
+        "                return os.environ[env_key]\n"
+        "            return config.get(key, config.get(env_key, os.environ.get(env_key, default)))\n",
+        "environment-managed PaddleOCR credentials",
+    )
+    ocr_model_target.write_text(text, encoding="utf-8")
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:

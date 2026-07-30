@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import gc
 import hmac
 import json
 import os
@@ -27,10 +29,12 @@ if DEVICE not in {"cpu", "gpu"}:
     raise RuntimeError("PADDLEOCR_DEVICE must be cpu or gpu")
 
 if DEVICE == "gpu":
-    if "CUDAExecutionProvider" not in ort.get_available_providers():
-        raise RuntimeError("CUDAExecutionProvider is unavailable")
-    if not Path("/dev/nvidiactl").exists():
-        raise RuntimeError("PADDLEOCR_DEVICE=gpu but no NVIDIA device is available")
+    available_providers = ort.get_available_providers()
+    if "CUDAExecutionProvider" not in available_providers:
+        raise RuntimeError(
+            "PADDLEOCR_DEVICE=gpu requires ONNX Runtime CUDAExecutionProvider; "
+            f"available providers: {available_providers}"
+        )
 
 MODEL_DIRECTORY = Path(__import__("rapidocr").__file__).resolve().parent / "models"
 DETECTION_MODEL_PATH = MODEL_DIRECTORY / "ch_PP-OCRv5_det_mobile.onnx"
@@ -61,30 +65,52 @@ OCR_PARAMS = {
 }
 
 OCR = RapidOCR(params=OCR_PARAMS)
+OCR_SESSION_PROVIDERS = {
+    name: component.session.session.get_providers()
+    for name, component in (("detector", OCR.text_det), ("recognizer", OCR.text_rec))
+}
+if DEVICE == "gpu":
+    invalid_sessions = {
+        name: providers
+        for name, providers in OCR_SESSION_PROVIDERS.items()
+        if not providers or providers[0] != "CUDAExecutionProvider"
+    }
+    if invalid_sessions:
+        raise RuntimeError(
+            "PADDLEOCR_DEVICE=gpu could not create CUDA-backed OCR sessions; "
+            f"actual providers: {invalid_sessions}"
+        )
 RENDER_SCALE = float(os.getenv("PADDLEOCR_RENDER_SCALE", "2.0"))
 if RENDER_SCALE <= 0:
     raise RuntimeError("PADDLEOCR_RENDER_SCALE must be positive")
 
 JOB_TTL_SECONDS = int(os.getenv("PADDLEOCR_JOB_TTL_SECONDS", "3600"))
 JOB_WORKERS = int(os.getenv("PADDLEOCR_JOB_WORKERS", "1"))
-MAX_UPLOAD_BYTES = int(os.getenv("PADDLEOCR_MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
-MAX_PDF_PAGES = int(os.getenv("PADDLEOCR_MAX_PDF_PAGES", "2000"))
+MAX_UPLOAD_BYTES = int(os.getenv("PADDLEOCR_MAX_UPLOAD_BYTES", "0"))
+MAX_PDF_PAGES = int(os.getenv("PADDLEOCR_MAX_PDF_PAGES", "0"))
 MAX_PENDING_JOBS = int(os.getenv("PADDLEOCR_MAX_PENDING_JOBS", "8"))
 MIN_FREE_BYTES = int(os.getenv("PADDLEOCR_MIN_FREE_BYTES", str(512 * 1024 * 1024)))
 MAX_PAGE_PIXELS = int(os.getenv("PADDLEOCR_MAX_PAGE_PIXELS", "50000000"))
+OCR_BYTES_PER_PIXEL = int(os.getenv("PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL", "48"))
+MEMORY_POLL_SECONDS = float(os.getenv("PADDLEOCR_MEMORY_POLL_SECONDS", "2"))
 PROVISION_INTERVAL_SECONDS = int(os.getenv("PADDLEOCR_PROVISION_INTERVAL_SECONDS", "30"))
 for setting_name, setting_value in (
     ("PADDLEOCR_JOB_TTL_SECONDS", JOB_TTL_SECONDS),
     ("PADDLEOCR_JOB_WORKERS", JOB_WORKERS),
-    ("PADDLEOCR_MAX_UPLOAD_BYTES", MAX_UPLOAD_BYTES),
-    ("PADDLEOCR_MAX_PDF_PAGES", MAX_PDF_PAGES),
     ("PADDLEOCR_MAX_PENDING_JOBS", MAX_PENDING_JOBS),
     ("PADDLEOCR_MIN_FREE_BYTES", MIN_FREE_BYTES),
     ("PADDLEOCR_MAX_PAGE_PIXELS", MAX_PAGE_PIXELS),
+    ("PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL", OCR_BYTES_PER_PIXEL),
     ("PADDLEOCR_PROVISION_INTERVAL_SECONDS", PROVISION_INTERVAL_SECONDS),
 ):
     if setting_value < 1:
         raise RuntimeError(f"{setting_name} must be positive")
+if MAX_PDF_PAGES < 0:
+    raise RuntimeError("PADDLEOCR_MAX_PDF_PAGES must be zero (unlimited) or positive")
+if MAX_UPLOAD_BYTES < 0:
+    raise RuntimeError("PADDLEOCR_MAX_UPLOAD_BYTES must be zero (unlimited) or positive")
+if MEMORY_POLL_SECONDS <= 0:
+    raise RuntimeError("PADDLEOCR_MEMORY_POLL_SECONDS must be positive")
 
 INTERNAL_TOKEN = os.getenv("PADDLEOCR_INTERNAL_TOKEN", "")
 if not INTERNAL_TOKEN:
@@ -94,10 +120,15 @@ JOB_DIRECTORY = Path(os.getenv("PADDLEOCR_JOB_DIRECTORY", "/tmp/lig-paddleocr-jo
 JOB_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
 app = Quart(__name__)
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES + 1024 * 1024
+if MAX_UPLOAD_BYTES:
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES + 1024 * 1024
 executor = ThreadPoolExecutor(max_workers=JOB_WORKERS, thread_name_prefix="paddleocr-ko")
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.Lock()
+try:
+    _malloc_trim = ctypes.CDLL("libc.so.6").malloc_trim
+except (OSError, AttributeError):
+    _malloc_trim = None
 provisioner_stop = threading.Event()
 
 
@@ -190,31 +221,93 @@ def _rectangular_box(points: Any) -> list[int]:
     ]
 
 
-def _validate_page_pixels(width: float, height: float) -> None:
-    if width <= 0 or height <= 0 or width * height > MAX_PAGE_PIXELS:
-        raise OcrResourceLimitError(f"page exceeds the {MAX_PAGE_PIXELS} pixel OCR limit")
+def _host_available_memory() -> int:
+    candidates: list[int] = []
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+            name, value = line.split(":", 1)
+            values[name] = int(value.strip().split()[0]) * 1024
+        if values.get("MemAvailable", 0) > 0:
+            candidates.append(values["MemAvailable"])
+    except (OSError, ValueError, KeyError):
+        pass
+
+    try:
+        limit_text = Path("/sys/fs/cgroup/memory.max").read_text(encoding="ascii").strip()
+        if limit_text != "max":
+            limit = int(limit_text)
+            current = int(Path("/sys/fs/cgroup/memory.current").read_text(encoding="ascii").strip())
+            candidates.append(max(0, limit - current))
+    except (OSError, ValueError):
+        pass
+
+    try:
+        limit = int(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes").read_text(encoding="ascii").strip())
+        current = int(Path("/sys/fs/cgroup/memory/memory.usage_in_bytes").read_text(encoding="ascii").strip())
+        if 0 < limit < 2**60:
+            candidates.append(max(0, limit - current))
+    except (OSError, ValueError):
+        pass
+
+    return min(candidates) if candidates else 2**63 - 1
 
 
-def _pdf_render_scale(width: float, height: float) -> float:
+def _release_page_memory() -> None:
+    gc.collect()
+    if _malloc_trim is not None:
+        _malloc_trim(0)
+
+
+def _wait_for_memory() -> int:
+    while True:
+        available = _host_available_memory()
+        if available > MIN_FREE_BYTES:
+            return available
+        _release_page_memory()
+        time.sleep(MEMORY_POLL_SECONDS)
+
+
+def _page_pixel_budget(available_memory: int | None = None) -> int:
+    available = _host_available_memory() if available_memory is None else available_memory
+    usable = max(1, available - MIN_FREE_BYTES)
+    adaptive_budget = max(1, usable // max(1, OCR_BYTES_PER_PIXEL * JOB_WORKERS))
+    return max(1, min(MAX_PAGE_PIXELS, adaptive_budget))
+
+
+def _pdf_render_scale(width: float, height: float, available_memory: int | None = None) -> float:
     if width <= 0 or height <= 0:
         raise OcrResourceLimitError("PDF page dimensions must be positive")
-    return min(RENDER_SCALE, (MAX_PAGE_PIXELS / (width * height)) ** 0.5)
+    return min(RENDER_SCALE, (_page_pixel_budget(available_memory) / (width * height)) ** 0.5)
 
 
-def _ocr_image(image: Image.Image) -> dict[str, Any]:
-    rgb_image = image.convert("RGB")
-    _validate_page_pixels(*rgb_image.size)
-    result = OCR(np.asarray(rgb_image), use_cls=False)
-    texts = list(result.txts) if result.txts is not None else []
-    boxes = [_rectangular_box(box) for box in result.boxes] if result.boxes is not None else []
-    scores = [float(score) for score in result.scores] if result.scores is not None else []
-    return {
-        "prunedResult": {
-            "rec_texts": texts,
-            "rec_boxes": boxes,
-            "rec_scores": scores,
+def _fit_image_to_memory(image: Image.Image, available_memory: int) -> Image.Image:
+    if image.width <= 0 or image.height <= 0:
+        raise OcrResourceLimitError("image dimensions must be positive")
+    budget = _page_pixel_budget(available_memory)
+    if image.width * image.height <= budget:
+        return image.convert("RGB")
+    scale = (budget / (image.width * image.height)) ** 0.5
+    size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
+    return image.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+
+
+def _ocr_image(image: Image.Image, available_memory: int) -> dict[str, Any]:
+    rgb_image = _fit_image_to_memory(image, available_memory)
+    try:
+        result = OCR(np.asarray(rgb_image), use_cls=False)
+        texts = list(result.txts) if result.txts is not None else []
+        boxes = [_rectangular_box(box) for box in result.boxes] if result.boxes is not None else []
+        scores = [float(score) for score in result.scores] if result.scores is not None else []
+        return {
+            "prunedResult": {
+                "rec_texts": texts,
+                "rec_boxes": boxes,
+                "rec_scores": scores,
+            }
         }
-    }
+    finally:
+        rgb_image.close()
 
 
 def _write_page_result(output, page: dict[str, Any]) -> None:
@@ -233,24 +326,30 @@ def _process_document(source_path: Path, result_path: Path, progress=None) -> in
             document = pdfium.PdfDocument(str(source_path))
             try:
                 for page in document:
-                    width, height = page.get_size()
-                    image = page.render(scale=_pdf_render_scale(width, height)).to_pil()
                     try:
-                        _write_page_result(output, _ocr_image(image))
-                        page_count += 1
-                        if progress:
-                            progress(page_count)
+                        available = _wait_for_memory()
+                        width, height = page.get_size()
+                        image = page.render(scale=_pdf_render_scale(width, height, available)).to_pil()
+                        try:
+                            _write_page_result(output, _ocr_image(image, available))
+                            page_count += 1
+                            if progress:
+                                progress(page_count)
+                        finally:
+                            image.close()
                     finally:
-                        image.close()
+                        page.close()
+                        _release_page_memory()
             finally:
                 document.close()
         else:
             with Image.open(source_path) as image:
-                _validate_page_pixels(*image.size)
-                _write_page_result(output, _ocr_image(image))
+                available = _wait_for_memory()
+                _write_page_result(output, _ocr_image(image, available))
                 page_count = 1
                 if progress:
                     progress(page_count)
+            _release_page_memory()
     return page_count
 
 
@@ -308,7 +407,7 @@ async def health():
     return jsonify(
         status="ok",
         device=DEVICE,
-        provider="CUDAExecutionProvider" if DEVICE == "gpu" else "CPUExecutionProvider",
+        provider=OCR_SESSION_PROVIDERS,
         model="korean_PP-OCRv5_mobile_rec",
         activeJobs=active_jobs,
         maxPendingJobs=MAX_PENDING_JOBS,
@@ -334,29 +433,33 @@ async def create_job():
     source_path = JOB_DIRECTORY / f"{job_id}.source"
     result_path = JOB_DIRECTORY / f"{job_id}.jsonl"
     now = time.time()
-    with jobs_lock:
-        active_jobs = sum(job["state"] in {"uploading", "queued", "running"} for job in jobs.values())
-        if active_jobs >= MAX_PENDING_JOBS:
-            return jsonify(error="OCR queue is full; retry after an active job finishes"), 429
-        jobs[job_id] = {
-            "state": "uploading",
-            "created_at": now,
-            "updated_at": now,
-            "result_token": uuid.uuid4().hex,
-            "source_path": str(source_path),
-            "result_path": str(result_path),
-        }
+    while True:
+        with jobs_lock:
+            active_jobs = sum(job["state"] in {"uploading", "queued", "running"} for job in jobs.values())
+            if active_jobs < MAX_PENDING_JOBS:
+                jobs[job_id] = {
+                    "state": "uploading",
+                    "created_at": now,
+                    "updated_at": now,
+                    "result_token": uuid.uuid4().hex,
+                    "source_path": str(source_path),
+                    "result_path": str(result_path),
+                }
+                break
+        await asyncio.sleep(MEMORY_POLL_SECONDS)
 
     scheduled = False
     try:
-        expected_bytes = min(request.content_length or MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES)
-        if shutil.disk_usage(JOB_DIRECTORY).free < expected_bytes + MIN_FREE_BYTES:
-            return jsonify(error="insufficient temporary disk space for OCR"), 507
+        expected_bytes = request.content_length or 0
+        if MAX_UPLOAD_BYTES:
+            expected_bytes = min(expected_bytes or MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES)
+        while shutil.disk_usage(JOB_DIRECTORY).free < expected_bytes + MIN_FREE_BYTES:
+            await asyncio.sleep(MEMORY_POLL_SECONDS)
         await upload.save(source_path)
         source_size = source_path.stat().st_size
         if source_size == 0:
             return jsonify(error="file is empty"), 400
-        if source_size > MAX_UPLOAD_BYTES:
+        if MAX_UPLOAD_BYTES and source_size > MAX_UPLOAD_BYTES:
             return jsonify(error=f"file exceeds the {MAX_UPLOAD_BYTES} byte OCR limit"), 413
 
         with source_path.open("rb") as source:
@@ -365,16 +468,14 @@ async def create_job():
             document = pdfium.PdfDocument(str(source_path))
             try:
                 page_count = len(document)
-                if page_count > MAX_PDF_PAGES:
+                if MAX_PDF_PAGES and page_count > MAX_PDF_PAGES:
                     return jsonify(error=f"PDF exceeds the {MAX_PDF_PAGES} page OCR limit"), 413
-                for page in document:
-                    width, height = page.get_size()
-                    _pdf_render_scale(width, height)
             finally:
                 document.close()
         else:
             with Image.open(source_path) as image:
-                _validate_page_pixels(*image.size)
+                if image.width <= 0 or image.height <= 0:
+                    return jsonify(error="image dimensions must be positive"), 400
 
         with jobs_lock:
             job = jobs.get(job_id)

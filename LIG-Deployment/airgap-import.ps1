@@ -140,7 +140,7 @@ if ($Device -eq "gpu") {
         throw "The GPU is visible, but DeepDoc could not create a CUDA ONNX session. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }
     try {
-        Invoke-Docker @("run", "--rm", "--gpus", "all", "--entrypoint", "/ragflow/.venv/bin/python", $manifest.gpuOcrImage, "-c", "from pathlib import Path; import ctypes, rapidocr; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; assert Path('/dev/nvidiactl').exists(), 'NVIDIA device is unavailable'; model=Path(rapidocr.__file__).resolve().parent/'models'/'korean_PP-OCRv5_rec_mobile.onnx'; session=ort.InferenceSession(str(model), providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'PaddleOCR CUDA provider unavailable: {providers}'; print('PaddleOCR ONNX provider:', providers[0])")
+        Invoke-Docker @("run", "--rm", "--gpus", "all", "--entrypoint", "/ragflow/.venv/bin/python", $manifest.gpuOcrImage, "-c", "from pathlib import Path; import ctypes, rapidocr; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; model=Path(rapidocr.__file__).resolve().parent/'models'/'korean_PP-OCRv5_rec_mobile.onnx'; session=ort.InferenceSession(str(model), providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'PaddleOCR CUDA provider unavailable: {providers}'; print('PaddleOCR ONNX provider:', providers[0])")
     } catch {
         throw "The GPU is visible, but the PaddleOCR image cannot use CUDAExecutionProvider. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }

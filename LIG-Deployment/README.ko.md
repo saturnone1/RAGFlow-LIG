@@ -21,7 +21,7 @@
 - 한국어 PaddleOCR 상태: `http://127.0.0.1:42316/health`
 - 선택형 Qwen3 임베딩 상태: `http://127.0.0.1:42317/health`
 - 로그: 컨테이너마다 최대 20 MiB 파일 3개
-- 동시 처리: CPU는 task executor 2개, 12 GiB GPU 설치는 모델 중복 적재를 피하도록 executor 1개
+- 동시 처리: CPU·GPU 모두 기본 task executor 1개. 작업은 거부하지 않고 대기시키며, 실제 메모리 여유를 확인한 뒤에만 worker 수를 늘림
 - 자원: Compose에서 컨테이너별 CPU·시스템 RAM 상한을 두지 않으며, upstream Infinity의 RAM 상한도 LIG 오버레이에서 해제. Docker Engine 또는 서버 운영 정책의 전체 자원 범위를 사용
 
 전체 호스트 포트 배치는 다음과 같습니다. 컨테이너 내부 기본 포트는 바꾸지 않고 Windows 호스트에 공개되는 포트만 정렬했습니다.
@@ -88,7 +88,7 @@ NVIDIA API 키는 Compose 파일이나 저장소에 기록하지 않고 RAGFlow 
 .\lig-ragflow.ps1 embedding-test
 ```
 
-RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Base URL `http://qwen3-embedding:8080`, 유형 `Embedding`, 최대 토큰 `2048`로 등록합니다. Docker 호스트에서 직접 시험할 때만 `http://127.0.0.1:42317`을 사용합니다. CPU 추론이 LIG 이미지의 60초 공급자 요청 제한시간 안에 끝나도록 `.env.lig`의 `EMBEDDING_BATCH_SIZE=2`를 사용합니다. 이는 한 요청에 묶는 청크 수일 뿐 CPU·RAM 상한이 아닙니다.
+RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Base URL `http://qwen3-embedding:8080`, 유형 `Embedding`, 최대 토큰 `2048`로 등록합니다. Docker 호스트에서 직접 시험할 때만 `http://127.0.0.1:42317`을 사용합니다. CPU 추론의 공급자 요청 제한시간은 300초이며 `.env.lig`의 `EMBEDDING_BATCH_SIZE=4`를 사용합니다. CPU TEI backend가 실제로 강제하는 최대 batch request 수와 일치해 긴 청크 요청이 제한시간에 가까워지는 것을 피합니다. `EMBEDDING_MAX_CONCURRENT_REQUESTS=1`은 초과 요청을 실패시키지 않고 어댑터에서 대기시키고, `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 TEI 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않고 명시적인 장애를 반환합니다. 이 값들은 CPU·RAM 사용량이나 문서 전체 크기의 상한이 아닙니다.
 
 상태와 로그는 다음처럼 확인합니다.
 
@@ -129,17 +129,17 @@ upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 
 
 DeepDOC는 삭제하지 않습니다. DeepDOC는 OCR뿐 아니라 레이아웃, 표, 좌표와 이미지 영역을 처리하며 영어·중국어 문서 및 복잡한 편집 문서에서 여전히 별도 가치가 있습니다. 한국어 스캔 문서에서는 DeepDOC 문자 사전에 한글이 없어 PaddleOCR를 사용합니다.
 
-`TASK_EXECUTOR_WORKERS`는 `.env.lig`에서 조정합니다. CPU 설치의 초기값은 2이며 Compose가 CPU나 시스템 RAM 사용량을 제한하지는 않습니다. 여러 문서 작업의 병렬 처리에는 도움이 되지만, 단일 대형 PDF의 모든 페이지를 같은 비율로 가속한다고 보장할 수 없고 worker별로 파서 모델 메모리가 중복될 수 있습니다. 실제 서버와 문서 묶음으로 처리량과 메모리를 확인하면서 조정하십시오.
+API와 문서 작업기는 별도 컨테이너로 실행됩니다. 문서 작업기가 재시작되어도 웹/API와 데이터베이스가 함께 내려가지 않으며, 동일 작업에는 Redis lease를 사용해 중복 OCR을 막습니다. `TASK_EXECUTOR_WORKERS`의 초기값은 1입니다. 여러 문서의 병렬 처리가 반드시 필요하고 실제 메모리 여유를 확인한 경우에만 늘리십시오. worker마다 파서 모델 메모리가 중복됩니다.
 
 선택형 Qwen3 TEI CPU 서비스는 현재 설정에서 유휴 메모리 약 1.5 GiB를 추가로 사용합니다. Docker VM 메모리가 부족하면 `TASK_EXECUTOR_WORKERS=1`로 낮추거나 임베딩 서비스를 별도 서버에서 운영하십시오. Compose는 시스템 RAM 상한을 강제로 설정하지 않습니다.
 
 ```dotenv
-TASK_EXECUTOR_WORKERS=2
+TASK_EXECUTOR_WORKERS=1
 ```
 
-문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로는 LIG 이미지의 60초 공급자 요청 제한을 기준으로 embedding batch를 2로 설정합니다. 요청 단위 조정이며 자원 상한은 아닙니다. 설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`는 값이 양의 정수인지 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
+문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로의 공급자 요청 제한시간은 300초이고 embedding batch는 4입니다. 요청 단위 조정이며 자원 상한은 아닙니다. 설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`가 값을 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
 
-내부 PaddleOCR는 기본적으로 업로드 1 GiB, OCR 작업당 PDF 2,000쪽, 페이지당 렌더링 5천만 픽셀, 활성 작업 8개로 제한하며 임시 디스크 512 MiB를 남깁니다. RAGFlow는 `PADDLEOCR_TASK_PAGE_SIZE`(기본 12쪽) 단위로 나눈 범위만 OCR 서비스에 전송하므로 대용량 PDF 원본을 작업마다 반복 처리하지 않으며, 예전 UI가 저장한 과도한 작업 크기도 자동으로 제한합니다. 큰 PDF 페이지는 픽셀 한도 안에서 자동 축소합니다. RAGFlow 업로드·청킹 제한과 PaddleOCR 제한은 `.env.lig`의 `MAX_CONTENT_LENGTH`와 `PADDLEOCR_MAX_UPLOAD_BYTES`에서 동일하게 유지합니다. `PADDLEOCR_TASK_PAGE_SIZE`, `PADDLEOCR_MAX_PDF_PAGES`, `PADDLEOCR_MAX_PAGE_PIXELS`, `PADDLEOCR_MAX_PENDING_JOBS`, `PADDLEOCR_MIN_FREE_BYTES`도 조정할 수 있습니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 TTL 정리 대상에서 제외합니다. 내부 Bearer 토큰은 최초 `config`/`start` 때 `.env.secret`에 자동 생성되며 미설정 상태로는 OCR 서비스가 시작되지 않습니다.
+내부 PaddleOCR의 문서 크기와 페이지 수는 기본적으로 제한하지 않습니다. RAGFlow는 PDF를 최대 12쪽 작업으로 나누고, 그보다 메모리가 부족하면 현재 가용 메모리·worker 수·파서 동시성에 맞춰 작업 페이지 수를 1쪽까지 자동 축소합니다. OCR 서비스도 페이지를 한 장씩 렌더링하고 메모리가 부족하면 회수될 때까지 대기합니다. 큰 페이지는 현재 메모리 예산에 맞게 축소하고, OCR 큐가 차면 거부하지 않고 순서를 기다립니다. `MAX_CONTENT_LENGTH`, `LIG_DOCUMENT_MAX_BYTES`, `PADDLEOCR_MAX_UPLOAD_BYTES`, `PADDLEOCR_MAX_PDF_PAGES`의 `0`은 무제한입니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 정리하지 않습니다. 내부 Bearer 토큰과 문서 암호화 키는 최초 실행 때 생성해 `%LOCALAPPDATA%\LIG-RAGFlow\.env.secret`에도 보존하므로 새 번들 폴더로 교체해도 기존 DB의 저장 암호를 계속 해제할 수 있습니다.
 
 1. `diagnostics`의 task executor heartbeat 수가 설정값과 일치하는지 확인합니다.
 2. UI의 문서 처리 상세에서 현재 단계와 실제 `process_duration`을 확인합니다.

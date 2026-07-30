@@ -10,6 +10,15 @@ import app as ocr_app
 
 
 class OcrJobLifecycleTests(unittest.TestCase):
+    def test_cpu_sessions_report_their_actual_provider(self) -> None:
+        self.assertTrue(ocr_app.OCR_SESSION_PROVIDERS)
+        self.assertTrue(
+            all(
+                providers[0] == "CPUExecutionProvider"
+                for providers in ocr_app.OCR_SESSION_PROVIDERS.values()
+            )
+        )
+
     def setUp(self) -> None:
         with ocr_app.jobs_lock:
             ocr_app.jobs.clear()
@@ -46,14 +55,31 @@ class OcrJobLifecycleTests(unittest.TestCase):
                 ocr_app._cleanup_job_files_at_startup()
             self.assertFalse(orphan.exists())
 
-    def test_page_pixel_limit_rejects_decompression_bombs(self) -> None:
-        ocr_app._validate_page_pixels(1000, 1000)
-        with self.assertRaisesRegex(ValueError, "pixel OCR limit"):
-            ocr_app._validate_page_pixels(ocr_app.MAX_PAGE_PIXELS, 2)
+    def test_large_image_is_scaled_to_the_current_memory_budget(self) -> None:
+        from PIL import Image
+
+        image = Image.new("RGB", (2000, 1000))
+        with patch.object(ocr_app, "_page_pixel_budget", return_value=500_000):
+            fitted = ocr_app._fit_image_to_memory(image, 1024 * 1024 * 1024)
+        try:
+            self.assertLessEqual(fitted.width * fitted.height, 500_000)
+        finally:
+            fitted.close()
+            image.close()
+
+    def test_memory_budget_adapts_without_rejecting_a_page(self) -> None:
+        budget = ocr_app._page_pixel_budget(
+            ocr_app.MIN_FREE_BYTES + ocr_app.OCR_BYTES_PER_PIXEL * 2_000_000
+        )
+        self.assertEqual(budget, min(ocr_app.MAX_PAGE_PIXELS, 2_000_000 // ocr_app.JOB_WORKERS))
 
     def test_pdf_render_scale_does_not_double_scale_or_reject_large_pages(self) -> None:
         self.assertEqual(ocr_app._pdf_render_scale(1000, 1000), ocr_app.RENDER_SCALE)
-        scale = ocr_app._pdf_render_scale(ocr_app.MAX_PAGE_PIXELS, 2)
+        scale = ocr_app._pdf_render_scale(
+            ocr_app.MAX_PAGE_PIXELS,
+            2,
+            ocr_app.MIN_FREE_BYTES + ocr_app.OCR_BYTES_PER_PIXEL * ocr_app.MAX_PAGE_PIXELS,
+        )
         self.assertLess(scale, 1.0)
         self.assertLessEqual(ocr_app.MAX_PAGE_PIXELS * 2 * scale * scale, ocr_app.MAX_PAGE_PIXELS + 1)
         with self.assertRaisesRegex(ValueError, "dimensions must be positive"):

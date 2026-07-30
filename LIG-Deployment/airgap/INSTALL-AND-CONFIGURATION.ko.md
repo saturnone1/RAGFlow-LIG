@@ -172,7 +172,7 @@ RAGFlow 웹 UI의 `설정 → 모델 공급자`에서 다음 값을 등록합니
 
 `http://127.0.0.1:42317`은 Windows 호스트의 점검 주소입니다. RAGFlow는 Docker 네트워크 내부 주소인 `http://qwen3-embedding:8080`을 사용해야 합니다. 어댑터는 검색 질의에만 Qwen 권장 instruction을 붙이고 문서 청크에는 붙이지 않습니다.
 
-`.env.lig`의 `EMBEDDING_BATCH_SIZE=2`는 CPU Qwen3 요청이 LIG 이미지의 60초 공급자 제한시간 안에 끝나도록 한 요청에 묶는 청크 수를 조정합니다. CPU 코어, 메모리 또는 전체 처리량에 상한을 거는 설정이 아닙니다.
+`.env.lig`의 `EMBEDDING_BATCH_SIZE=4`는 CPU TEI backend가 강제하는 최대 batch request 수와 일치하며 공급자 요청 제한시간은 300초입니다. `EMBEDDING_MAX_CONCURRENT_REQUESTS=1`은 동시에 들어온 요청을 실패시키지 않고 순서대로 기다리게 해 TEI backend 재시작을 방지하고, `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 backend 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않습니다. CPU 코어, 메모리 또는 전체 처리량에 상한을 거는 설정이 아닙니다.
 
 DeepDoc/PaddleOCR GPU와 이 embedding 서비스는 별개입니다. Qwen3는 CPU에서 실행되므로 12 GiB GPU VRAM을 사용하지 않지만, Docker 시스템 RAM을 유휴 상태에서 약 1.5 GiB 추가 사용합니다. Compose는 임의의 CPU·RAM 상한을 두지 않습니다.
 
@@ -202,10 +202,10 @@ DeepDOC는 영어·중국어 문서와 표·레이아웃·좌표 처리용으로
 기본 성능 설정은 `LIG-Deployment\.env.lig`에 있습니다. 기본 `API_PROXY_SCHEME=python`은 문서 암호 처리와 OCR/청킹 보강이 모두 적용되는 실행 경로입니다. upstream Go/Hybrid 모드로 바꿀 수는 있지만 해당 LIG 확장 전체는 보장되지 않습니다.
 
 ```dotenv
-TASK_EXECUTOR_WORKERS=2
+TASK_EXECUTOR_WORKERS=1
 ```
 
-Compose는 CPU와 시스템 RAM 사용량을 제한하지 않습니다. CPU 설치의 task executor 초기값은 2이고, 문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3는 60초 요청 제한을 기준으로 embedding batch를 2로 설정합니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
+API와 task executor는 별도 컨테이너입니다. 초기 task executor 수는 1이며 PDF는 최대 12쪽씩, 메모리가 부족하면 1쪽까지 자동 축소해 순차 처리합니다. 문서 크기·페이지 수 제한은 기본적으로 비활성화되어 있으므로 큰 문서는 느리더라도 계속 진행됩니다. 로컬 Qwen3 요청 제한시간은 300초이고 embedding batch는 4입니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
 
 GPU 설치 스크립트는 12 GiB VRAM에서 DeepDoc 모델이 작업 실행기마다 중복 적재되는 위험을 줄이기 위해 `TASK_EXECUTOR_WORKERS=1`을 적용합니다. 실제 GPU 모델과 VRAM 사용량을 측정한 뒤에만 2개로 올리십시오.
 

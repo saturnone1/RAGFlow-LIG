@@ -102,11 +102,6 @@ $previous = $values["LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS"]
 $oldEntry = "${oldKeyId}:$oldKey"
 if ([string]::IsNullOrWhiteSpace($previous)) { $previous = $oldEntry }
 elseif (($previous -split ',') -notcontains $oldEntry) { $previous = "$previous,$oldEntry" }
-$previousEntries = @($previous -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-if ($previousEntries.Count -gt 15) {
-    throw "The previous-key limit is 15. Rewrap all documents and retire an unused previous key before rotating again."
-}
-
 $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
 $backupFile = "$secretFile.$timestamp.bak"
 Copy-Item -LiteralPath $secretFile -Destination $backupFile
