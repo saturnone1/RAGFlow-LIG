@@ -2,11 +2,13 @@ param(
     [string]$McpUrl = "http://127.0.0.1:42306/mcp",
     [string]$HealthUrl = "http://127.0.0.1:42306/healthz",
     [string]$ApiKey = $env:RAGFLOW_API_KEY,
+    [string]$MountedDataDirectory = (Join-Path $PSScriptRoot "..\..\LIG-Deployment\mcp-files"),
     [switch]$GenericUpload
 )
 
 $ErrorActionPreference = "Stop"
 if (-not $ApiKey) { throw "ApiKey or RAGFLOW_API_KEY is required" }
+$stagedFixture = $null
 
 function Invoke-Mcp([string]$Body, [string]$Session = "", [switch]$WithoutAuthentication) {
     $client = [Net.Http.HttpClient]::new()
@@ -58,6 +60,11 @@ if ($version.error -or $version.result.isError) { throw "Compose MCP RAGFlow ver
 $uploadedFileId = $null
 try {
     if ($GenericUpload) {
+        $mountedDirectory = [IO.Path]::GetFullPath($MountedDataDirectory)
+        [IO.Directory]::CreateDirectory($mountedDirectory) | Out-Null
+        $stagedFixture = Join-Path $mountedDirectory "fixture-ko.txt"
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "fixture-ko.txt") -Destination $stagedFixture -Force
+
         $uploadCall = @{ jsonrpc="2.0"; id=4; method="tools/call"; params=@{ name="upload_rag_flow_api_files"; arguments=@{ relativePath="api/v1/files"; filePaths=@("/data/fixture-ko.txt"); fieldName="file" } } } | ConvertTo-Json -Depth 10 -Compress
         $uploadResult = ConvertFrom-Mcp (Invoke-Mcp $uploadCall $initResponse.Session).Content
         if ($uploadResult.error -or $uploadResult.result.isError) { throw "Compose MCP mounted-file upload failed" }
@@ -79,6 +86,9 @@ finally {
             $cleanup = @{ jsonrpc="2.0"; id=99; method="tools/call"; params=@{ name="rag_flow_api_request"; arguments=@{ method="DELETE"; relativePath="api/v1/files"; bodyJson=$cleanupBody } } } | ConvertTo-Json -Depth 10 -Compress
             Invoke-Mcp $cleanup $initResponse.Session | Out-Null
         } catch { }
+    }
+    if ($stagedFixture) {
+        Remove-Item -LiteralPath $stagedFixture -Force -ErrorAction SilentlyContinue
     }
 }
 

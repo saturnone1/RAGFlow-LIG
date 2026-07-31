@@ -233,6 +233,31 @@ def main() -> None:
         "            result_resp.close()\n",
         "incremental PaddleOCR JSONL parsing",
     )
+    text = replace_once(
+        text,
+        "        while True:\n"
+        "            if time.monotonic() >= deadline:\n",
+        "        while True:\n"
+        "            if callback:\n"
+        "                try:\n"
+        "                    callback(None, \"\")\n"
+        "                except BaseException:\n"
+        "                    try:\n"
+        "                        requests.delete(poll_url, headers=headers, timeout=5)\n"
+        "                    except requests.RequestException as cancel_error:\n"
+        "                        self.logger.warning(f\"[PaddleOCR] failed to cancel remote job {job_id}: {cancel_error}\")\n"
+        "                    raise\n"
+        "            if time.monotonic() >= deadline:\n",
+        "PaddleOCR cooperative cancellation polling",
+    )
+    text = replace_once(
+        text,
+        '            elif state == "failed":\n',
+        '            elif state in {"canceled", "cancelled"}:\n'
+        '                raise RuntimeError(f"[PaddleOCR] job {job_id} was canceled")\n'
+        '            elif state == "failed":\n',
+        "PaddleOCR canceled job state",
+    )
     paddleocr_target.write_text(text, encoding="utf-8")
 
     task_executor_target = Path(sys.argv[3])
@@ -337,13 +362,47 @@ def main() -> None:
     )
     text = replace_once(
         text,
+        "from common.constants import PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME\n",
+        "from common.constants import PAGERANK_FLD, TAG_FLD, SVR_CONSUMER_GROUP_NAME, TaskStatus\n",
+        "task executor cancellation status import",
+    )
+    text = replace_once(
+        text,
         'WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))\n'
         "stop_event = threading.Event()\n",
         'WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("WORKER_HEARTBEAT_TIMEOUT", "120"))\n'
         'TASK_LEASE_SECONDS = int(os.environ.get("TASK_LEASE_SECONDS", "180"))\n'
         'TASK_LEASE_REFRESH_SECONDS = max(5, min(60, TASK_LEASE_SECONDS // 3))\n'
+        'TASK_CANCEL_GRACE_SECONDS = max(1.0, float(os.environ.get("TASK_CANCEL_GRACE_SECONDS", "5")))\n'
+        'TASK_CANCEL_POLL_SECONDS = max(0.25, float(os.environ.get("TASK_CANCEL_POLL_SECONDS", "1")))\n'
+        'TASK_PENDING_CLAIM_IDLE_SECONDS = max(\n'
+        '    float(WORKER_HEARTBEAT_TIMEOUT) * 2,\n'
+        '    float(os.environ.get("TASK_PENDING_CLAIM_IDLE_SECONDS", "300")),\n'
+        ')\n'
         "stop_event = threading.Event()\n",
         "task lease configuration",
+    )
+    text = replace_once(
+        text,
+        "        except StopIteration:\n"
+        "            for svr_queue_name in svr_queue_names:\n"
+        "                redis_msg = REDIS_CONN.queue_consumer(svr_queue_name, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)\n"
+        "                if redis_msg:\n"
+        "                    break\n",
+        "        except StopIteration:\n"
+        "            redis_msg = REDIS_CONN.claim_stale_message(\n"
+        "                svr_queue_names,\n"
+        "                SVR_CONSUMER_GROUP_NAME,\n"
+        "                CONSUMER_NAME,\n"
+        "                int(TASK_PENDING_CLAIM_IDLE_SECONDS * 1000),\n"
+        "            )\n"
+        "            for svr_queue_name in svr_queue_names:\n"
+        "                if redis_msg:\n"
+        "                    break\n"
+        "                redis_msg = REDIS_CONN.queue_consumer(svr_queue_name, SVR_CONSUMER_GROUP_NAME, CONSUMER_NAME)\n"
+        "                if redis_msg:\n"
+        "                    break\n",
+        "stale pending-message recovery before new work",
     )
     if text.count("        return None, None\n") != 4:
         raise SystemExit("Expected four task collector empty returns")
@@ -352,6 +411,11 @@ def main() -> None:
         text,
         "    canceled = False\n"
         "    if msg.get(\"doc_id\", \"\") in [GRAPH_RAPTOR_FAKE_DOC_ID, CANVAS_DEBUG_DOC_ID]:\n",
+        "    if has_canceled(msg[\"id\"]):\n"
+        "        DONE_TASKS += 1\n"
+        "        logging.info(\"Acknowledging canceled pending task %s before lease acquisition\", msg[\"id\"])\n"
+        "        redis_msg.ack()\n"
+        "        return redis_msg, None, None\n\n"
         "    task_lease = RedisDistributedLock(\n"
         "        f\"task_lease:{msg['id']}\", timeout=TASK_LEASE_SECONDS, blocking_timeout=0\n"
         "    )\n"
@@ -374,9 +438,18 @@ def main() -> None:
         "    task_type = msg.get(\"task_type\", \"\")\n",
         "        redis_msg.ack()\n"
         "        task_lease.release()\n"
-        "        return None, None, None\n\n"
+        "        return redis_msg, None, None\n\n"
         "    task_type = msg.get(\"task_type\", \"\")\n",
         "release lease for terminal queue messages",
+    )
+    text = replace_once(
+        text,
+        "        FAILED_TASKS += 1\n"
+        "        logging.warning(f\"collect task {msg['id']} {state}\")\n",
+        "        if canceled:\n"
+        "            DONE_TASKS += 1\n"
+        "        logging.warning(f\"collect task {msg['id']} {state}\")\n",
+        "terminal queue messages do not inflate failure metrics",
     )
     text = replace_once(
         text,
@@ -396,10 +469,65 @@ def main() -> None:
         "        await asyncio.sleep(TASK_LEASE_REFRESH_SECONDS)\n"
         "        if not task_lease.refresh():\n"
         "            logging.warning(\"Task lease refresh failed for %s; will retry\", task_id)\n\n\n"
+        "async def _watch_canceled_tasks():\n"
+        "    canceled_since = {}\n"
+        "    while True:\n"
+        "        active_task_ids = set(CURRENT_TASKS)\n"
+        "        now = time.monotonic()\n"
+        "        for task_id in active_task_ids:\n"
+        "            if not has_canceled(task_id):\n"
+        "                canceled_since.pop(task_id, None)\n"
+        "                continue\n"
+        "            first_seen = canceled_since.setdefault(task_id, now)\n"
+        "            if now - first_seen >= TASK_CANCEL_GRACE_SECONDS:\n"
+        "                logging.error(\n"
+        "                    \"Task %s ignored cancellation for %.1fs; restarting isolated executor process\",\n"
+        "                    task_id,\n"
+        "                    now - first_seen,\n"
+        "                )\n"
+        "                os._exit(75)\n"
+        "        for task_id in set(canceled_since) - active_task_ids:\n"
+        "            canceled_since.pop(task_id, None)\n"
+        "        await asyncio.sleep(TASK_CANCEL_POLL_SECONDS)\n\n\n"
         "async def handle_task():\n"
         "    global DONE_TASKS, FAILED_TASKS\n"
         "    redis_msg, task, task_lease = await collect()\n",
         "task lease heartbeat",
+    )
+    text = replace_once(
+        text,
+        "    except TaskCanceledException as e:\n"
+        "        DONE_TASKS += 1\n"
+        "        CURRENT_TASKS.pop(task_id, None)\n"
+        "        logging.info(f\"handle_task canceled for task {task_id}: {getattr(e, 'msg', str(e))}\")\n",
+        "    except TaskCanceledException as e:\n"
+        "        DONE_TASKS += 1\n"
+        "        CURRENT_TASKS.pop(task_id, None)\n"
+        "        try:\n"
+        "            document_tasks = list(TaskService.query(doc_id=task[\"doc_id\"]))\n"
+        "            has_new_run = any(\n"
+        "                (document_task.progress or 0) < 1 and not has_canceled(document_task.id)\n"
+        "                for document_task in document_tasks\n"
+        "            )\n"
+        "            if not has_new_run:\n"
+        "                DocumentService.update_by_id(\n"
+        "                    task[\"doc_id\"], {\"run\": TaskStatus.CANCEL.value, \"progress\": -1}\n"
+        "                )\n"
+        "        except Exception:\n"
+        "            logging.exception(\"Failed to converge canceled document state for task %s\", task_id)\n"
+        "        logging.info(f\"handle_task canceled for task {task_id}: {getattr(e, 'msg', str(e))}\")\n",
+        "canceled task document state convergence",
+    )
+    text = replace_once(
+        text,
+        "    if not task:\n"
+        "        await asyncio.sleep(5)\n"
+        "        return\n",
+        "    if not task:\n"
+        "        # Clean terminal messages inherited from dead consumers promptly.\n"
+        "        await asyncio.sleep(0.05 if redis_msg else 5)\n"
+        "        return\n",
+        "fast terminal pending-message cleanup",
     )
     text = replace_once(
         text,
@@ -422,6 +550,24 @@ def main() -> None:
         "        redis_msg.ack()\n\n\n"
         "async def get_server_ip() -> str:\n",
         "release task lease before acknowledging",
+    )
+    text = replace_once(
+        text,
+        "    report_task = asyncio.create_task(report_status())\n"
+        "    tasks = []\n",
+        "    report_task = asyncio.create_task(report_status())\n"
+        "    cancel_watchdog_task = asyncio.create_task(_watch_canceled_tasks())\n"
+        "    tasks = []\n",
+        "start task cancellation watchdog",
+    )
+    text = replace_once(
+        text,
+        "        report_task.cancel()\n"
+        "        await asyncio.gather(report_task, return_exceptions=True)\n",
+        "        report_task.cancel()\n"
+        "        cancel_watchdog_task.cancel()\n"
+        "        await asyncio.gather(report_task, cancel_watchdog_task, return_exceptions=True)\n",
+        "cancel watchdog shutdown",
     )
     task_executor_target.write_text(text, encoding="utf-8")
 
@@ -907,6 +1053,13 @@ def main() -> None:
     text = refactored_chunk_builder_target.read_text(encoding="utf-8")
     text = replace_once(
         text,
+        "from common.constants import ParserType\n",
+        "from common.constants import ParserType\n"
+        "from common.exceptions import TaskCanceledException\n",
+        "refactored chunk cancellation import",
+    )
+    text = replace_once(
+        text,
         "    try:\n"
         "        # Merge table parser config\n"
         "        parser_config = merge_table_parser_config_from_kb(ctx.raw_task)\n\n"
@@ -928,6 +1081,18 @@ def main() -> None:
         "                parser_filename,\n"
         "                binary=binary,\n",
         "refactored executor prepared parser filename",
+    )
+    text = replace_once(
+        text,
+        "    except Exception as e:\n"
+        "        ctx.progress_cb(-1, msg=\"Internal server error while chunking: %s\" % str(e).replace(\"'\", \"\"))\n"
+        "        logging.exception(\"Chunking {}/{} got exception\".format(ctx.location, ctx.name))\n",
+        "    except TaskCanceledException:\n"
+        "        raise\n"
+        "    except Exception as e:\n"
+        "        ctx.progress_cb(-1, msg=\"Internal server error while chunking: %s\" % str(e).replace(\"'\", \"\"))\n"
+        "        logging.exception(\"Chunking {}/{} got exception\".format(ctx.location, ctx.name))\n",
+        "refactored chunk cancellation passthrough",
     )
     refactored_chunk_builder_target.write_text(text, encoding="utf-8")
 
@@ -1249,6 +1414,39 @@ def main() -> None:
 
     redis_conn_target = checked_target(Path(sys.argv[18]), EXPECTED_REDIS_CONN_SHA256, "rag/utils/redis_conn.py")
     text = redis_conn_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    def get_pending_msg(self, queue, group_name):\n",
+        "    def claim_stale_message(self, queue_names, group_name, consumer_name, min_idle_time_ms):\n"
+        "        \"\"\"Claim one message abandoned by an inactive or replaced consumer.\"\"\"\n"
+        "        for queue_name in queue_names:\n"
+        "            try:\n"
+        "                group_info = self.REDIS.xinfo_groups(queue_name)\n"
+        "                if not any(gi[\"name\"] == group_name for gi in group_info):\n"
+        "                    continue\n"
+        "                claimed = self.REDIS.xautoclaim(\n"
+        "                    queue_name, group_name, consumer_name, min_idle_time_ms,\n"
+        "                    start_id=\"0-0\", count=1,\n"
+        "                )\n"
+        "                messages = claimed[1] if len(claimed) > 1 else []\n"
+        "                if not messages:\n"
+        "                    continue\n"
+        "                msg_id, payload = messages[0]\n"
+        "                logging.warning(\n"
+        "                    \"Claimed stale queue message %s from %s for consumer %s\",\n"
+        "                    msg_id, queue_name, consumer_name,\n"
+        "                )\n"
+        "                return RedisMsg(self.REDIS, queue_name, group_name, msg_id, payload)\n"
+        "            except Exception as e:\n"
+        "                if \"no such key\" not in str(e).lower():\n"
+        "                    logging.warning(\n"
+        "                        \"RedisDB.claim_stale_message %s got exception: %s\", queue_name, e\n"
+        "                    )\n"
+        "                    self.__open__()\n"
+        "        return None\n\n"
+        "    def get_pending_msg(self, queue, group_name):\n",
+        "stale consumer message recovery",
+    )
     text = replace_once(
         text,
         "    def release(self):\n"

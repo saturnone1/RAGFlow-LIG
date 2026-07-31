@@ -85,6 +85,8 @@ CPU와 GPU 설치 모두 한국어 PP-OCRv5 모델이 포함된 PaddleOCR 서비
 
 모든 기본 포트는 대상 PC의 `127.0.0.1`에만 공개됩니다.
 
+RAGFlow 컨테이너 내부의 `9382`는 Windows에서 직접 접속할 포트가 아닙니다. 이 번들은 공식 MCP를 호스트 `42303`에 매핑합니다. `42300`은 UI, `42301`은 REST API이므로 UI 포트의 `/api/v1/chat`을 API 연결 시험에 사용하지 마십시오.
+
 | 포트 | 용도 |
 | --- | --- |
 | `42300` | LIG AI Knowledge Hub 웹 UI |
@@ -205,7 +207,7 @@ DeepDOC는 영어·중국어 문서와 표·레이아웃·좌표 처리용으로
 TASK_EXECUTOR_WORKERS=1
 ```
 
-API와 task executor는 별도 컨테이너입니다. 초기 task executor 수는 1이며 PDF는 최대 12쪽씩, 메모리가 부족하면 1쪽까지 자동 축소해 순차 처리합니다. 문서 크기·페이지 수 제한은 기본적으로 비활성화되어 있으므로 큰 문서는 느리더라도 계속 진행됩니다. 로컬 Qwen3 요청 제한시간은 300초이고 embedding batch는 4입니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
+API와 task executor는 별도 컨테이너입니다. 초기 task executor 수는 1이며 PDF는 최대 12쪽씩, 메모리가 부족하면 1쪽까지 자동 축소해 순차 처리합니다. 문서 크기·페이지 수 제한은 기본적으로 비활성화되어 있으므로 큰 문서는 느리더라도 계속 진행됩니다. 취소 신호를 받은 파서는 협력 중단하며, 네이티브 라이브러리나 외부 파서가 5초 이상 취소를 무시하면 API가 아니라 격리 task executor 프로세스만 자동 재기동합니다. 컨테이너 교체나 비정상 종료로 과거 consumer에 묶인 Redis pending은 기본 300초 유휴 후 현재 worker가 자동 인계하고, task lease를 확인한 뒤 종료 작업은 승인 처리하고 유효 작업은 이어서 수행합니다. 로컬 Qwen3 요청 제한시간은 300초이고 embedding batch는 4입니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
 
 GPU 설치 스크립트는 12 GiB VRAM에서 DeepDoc 모델이 작업 실행기마다 중복 적재되는 위험을 줄이기 위해 `TASK_EXECUTOR_WORKERS=1`을 적용합니다. 실제 GPU 모델과 VRAM 사용량을 측정한 뒤에만 2개로 올리십시오.
 
@@ -220,6 +222,7 @@ GPU 설치 스크립트는 12 GiB VRAM에서 DeepDoc 모델이 작업 실행기�
 다음을 확인합니다.
 
 - `DockerError`와 `ApiError`가 `null`
+- `Connectivity.ApiPing`, `Connectivity.OfficialMcp.Reachable`, `Connectivity.ManagementMcp.Reachable`가 `true`
 - `Health`의 document engine, storage, database, redis가 모두 `green`
 - `CurrentTaskExecutorHeartbeatCount`가 `.env.lig`의 worker 수와 일치
 - 웹 UI가 HTTP 200으로 열림

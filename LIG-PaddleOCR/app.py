@@ -136,6 +136,10 @@ class OcrResourceLimitError(ValueError):
     pass
 
 
+class OcrJobCanceled(Exception):
+    pass
+
+
 @app.errorhandler(413)
 async def request_too_large(_error):
     return jsonify(error=f"request exceeds the {MAX_UPLOAD_BYTES} byte OCR upload limit"), 413
@@ -193,7 +197,7 @@ def _cleanup_jobs() -> None:
         expired = [
             job_id
             for job_id, job in jobs.items()
-            if job["state"] in {"done", "failed"} and job["updated_at"] < cutoff
+            if job["state"] in {"done", "failed", "canceled"} and job["updated_at"] < cutoff
         ]
         expired_jobs = [jobs.pop(job_id) for job_id in expired]
     for job in expired_jobs:
@@ -259,8 +263,14 @@ def _release_page_memory() -> None:
         _malloc_trim(0)
 
 
-def _wait_for_memory() -> int:
+def _raise_if_canceled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise OcrJobCanceled("OCR job canceled")
+
+
+def _wait_for_memory(cancel_event: threading.Event | None = None) -> int:
     while True:
+        _raise_if_canceled(cancel_event)
         available = _host_available_memory()
         if available > MIN_FREE_BYTES:
             return available
@@ -316,7 +326,12 @@ def _write_page_result(output, page: dict[str, Any]) -> None:
     output.flush()
 
 
-def _process_document(source_path: Path, result_path: Path, progress=None) -> int:
+def _process_document(
+    source_path: Path,
+    result_path: Path,
+    progress=None,
+    cancel_event: threading.Event | None = None,
+) -> int:
     page_count = 0
     with source_path.open("rb") as source:
         is_pdf = source.read(4) == b"%PDF"
@@ -327,11 +342,14 @@ def _process_document(source_path: Path, result_path: Path, progress=None) -> in
             try:
                 for page in document:
                     try:
-                        available = _wait_for_memory()
+                        _raise_if_canceled(cancel_event)
+                        available = _wait_for_memory(cancel_event)
                         width, height = page.get_size()
                         image = page.render(scale=_pdf_render_scale(width, height, available)).to_pil()
                         try:
+                            _raise_if_canceled(cancel_event)
                             _write_page_result(output, _ocr_image(image, available))
+                            _raise_if_canceled(cancel_event)
                             page_count += 1
                             if progress:
                                 progress(page_count)
@@ -344,8 +362,10 @@ def _process_document(source_path: Path, result_path: Path, progress=None) -> in
                 document.close()
         else:
             with Image.open(source_path) as image:
-                available = _wait_for_memory()
+                available = _wait_for_memory(cancel_event)
+                _raise_if_canceled(cancel_event)
                 _write_page_result(output, _ocr_image(image, available))
+                _raise_if_canceled(cancel_event)
                 page_count = 1
                 if progress:
                     progress(page_count)
@@ -359,16 +379,22 @@ def _run_job(job_id: str, source_path: Path, result_path: Path) -> None:
         if job is None:
             source_path.unlink(missing_ok=True)
             return
+        cancel_event = job["cancel_event"]
+        if cancel_event.is_set():
+            job.update(state="canceled", updated_at=time.time())
+            source_path.unlink(missing_ok=True)
+            return
         job.update(state="running", updated_at=time.time())
 
     def update_progress(page_count: int) -> None:
+        _raise_if_canceled(cancel_event)
         with jobs_lock:
             job = jobs.get(job_id)
             if job is not None:
                 job.update(processed_pages=page_count, updated_at=time.time())
 
     try:
-        page_count = _process_document(source_path, result_path, update_progress)
+        page_count = _process_document(source_path, result_path, update_progress, cancel_event)
         with jobs_lock:
             job = jobs.get(job_id)
             if job is not None:
@@ -378,6 +404,12 @@ def _run_job(job_id: str, source_path: Path, result_path: Path) -> None:
                     processed_pages=page_count,
                     updated_at=time.time(),
                 )
+    except OcrJobCanceled:
+        result_path.unlink(missing_ok=True)
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is not None:
+                job.update(state="canceled", updated_at=time.time())
     except Exception as exc:
         app.logger.exception("Korean OCR job %s failed", job_id)
         result_path.unlink(missing_ok=True)
@@ -444,6 +476,7 @@ async def create_job():
                     "result_token": uuid.uuid4().hex,
                     "source_path": str(source_path),
                     "result_path": str(result_path),
+                    "cancel_event": threading.Event(),
                 }
                 break
         await asyncio.sleep(MEMORY_POLL_SECONDS)
@@ -483,9 +516,12 @@ async def create_job():
                 return jsonify(error="OCR job reservation was lost"), 503
             job.update(state="queued", source_size=source_size, updated_at=time.time())
 
-        loop = asyncio.get_running_loop()
+        future = executor.submit(_run_job, job_id, source_path, result_path)
         scheduled = True
-        loop.run_in_executor(executor, _run_job, job_id, source_path, result_path)
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is not None:
+                job["future"] = future
         return jsonify(data={"jobId": job_id})
     except OcrResourceLimitError as exc:
         return jsonify(error=str(exc)), 413
@@ -526,6 +562,31 @@ async def get_job(job_id: str):
     elif job["state"] == "failed":
         payload["errorMsg"] = job.get("error", "OCR failed")
     return jsonify(data=payload)
+
+
+@app.delete("/api/v2/ocr/jobs/<job_id>")
+async def cancel_job(job_id: str):
+    if not _authorized():
+        return jsonify(error="unauthorized"), 401
+
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return jsonify(error="job not found"), 404
+        if job["state"] in {"done", "failed", "canceled"}:
+            return jsonify(data={"jobId": job_id, "state": job["state"]})
+        job["cancel_event"].set()
+        future = job.get("future")
+        canceled_before_start = bool(future and future.cancel())
+        job.update(
+            state="canceled" if canceled_before_start else "canceling",
+            updated_at=time.time(),
+        )
+        payload = {"jobId": job_id, "state": job["state"]}
+
+    if canceled_before_start:
+        _remove_job_files(job)
+    return jsonify(data=payload), 202
 
 
 @app.get("/api/v2/ocr/results/<job_id>.jsonl")

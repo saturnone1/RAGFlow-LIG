@@ -22,6 +22,7 @@
 - 선택형 Qwen3 임베딩 상태: `http://127.0.0.1:42317/health`
 - 로그: 컨테이너마다 최대 20 MiB 파일 3개
 - 동시 처리: CPU·GPU 모두 기본 task executor 1개. 작업은 거부하지 않고 대기시키며, 실제 메모리 여유를 확인한 뒤에만 worker 수를 늘림
+- 취소·장애 복구: 협력 가능한 파서는 즉시 중단하고, 네이티브/외부 파서가 취소를 무시하면 격리된 task executor 프로세스만 5초 후 재기동합니다. 컨테이너 교체로 이전 consumer에 남은 Redis pending 메시지는 5분 유휴 후 현재 worker가 자동 인계하며, 갱신형 task lease로 중복 실행을 막습니다.
 - 자원: Compose에서 컨테이너별 CPU·시스템 RAM 상한을 두지 않으며, upstream Infinity의 RAM 상한도 LIG 오버레이에서 해제. Docker Engine 또는 서버 운영 정책의 전체 자원 범위를 사용
 
 전체 호스트 포트 배치는 다음과 같습니다. 컨테이너 내부 기본 포트는 바꾸지 않고 Windows 호스트에 공개되는 포트만 정렬했습니다.
@@ -98,7 +99,7 @@ RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Ba
 .\lig-ragflow.ps1 logs
 ```
 
-`diagnostics`는 비밀값을 출력하지 않고 Compose 서비스 상태, Infinity·MinIO·MySQL·Valkey 상태, task executor heartbeat, 컨테이너 CPU·메모리·I/O 스냅숏, 최근 문서 처리 소요시간 로그와 오류를 JSON으로 출력합니다. heartbeat에는 최근 30분 이내 종료된 컨테이너도 남을 수 있으므로 `CurrentContainer=true`와 `CurrentTaskExecutorHeartbeatCount`를 현재 worker 수 기준으로 사용합니다. 장애나 장시간 처리 분석 시 결과를 파일로 보관할 수 있습니다.
+`diagnostics`는 비밀값을 출력하지 않고 UI·API·두 MCP의 정확한 주소와 MCP initialize 결과, Compose 서비스 상태, Infinity·MinIO·MySQL·Valkey 상태, task executor heartbeat, 컨테이너 CPU·메모리·I/O 스냅숏, 최근 문서 처리 소요시간 로그와 오류를 JSON으로 출력합니다. heartbeat의 `GroupPending`은 consumer group 전체의 미승인 작업 수이고 `GroupLag`는 아직 어느 worker에도 전달되지 않은 작업 수입니다. 최근 30분 이내 종료된 컨테이너도 남을 수 있으므로 `CurrentContainer=true`와 `CurrentTaskExecutorHeartbeatCount`를 현재 worker 수 기준으로 사용합니다. 장애나 장시간 처리 분석 시 결과를 파일로 보관할 수 있습니다.
 
 ```powershell
 .\lig-ragflow.ps1 diagnostics > diagnostics.json
@@ -216,5 +217,7 @@ NVIDIA GPU 장비에는 다음 설치 스크립트를 사용합니다. CUDA 접�
 ## MCP 범위
 
 RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://127.0.0.1:42303/mcp`와 LIG 관리 MCP `http://127.0.0.1:42306/mcp`를 RAGFlow와 함께 시작합니다. 관리 MCP는 데이터셋·문서와 나머지 `/api/v1` 운영 기능을 제공하며, 요청에는 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 Bearer 키로 사용합니다.
+
+`9382`는 RAGFlow 컨테이너 내부 MCP 포트이며 이 배포의 Windows 호스트 접속 포트가 아닙니다. REST API는 `http://127.0.0.1:42301/api/v1/...`에 호출합니다. `42300`은 웹 UI이므로 `http://127.0.0.1:42300/api/v1/chat` 같은 호출은 404가 정상이며, RAGFlow에는 범용 `/api/v1/chat` 단일 엔드포인트가 없습니다. MCP 클라이언트에는 REST API 주소가 아니라 위 `/mcp` 주소를 등록하십시오.
 
 컨테이너 MCP가 읽을 파일은 `LIG-Deployment/mcp-files`에 넣고 도구 인수에는 `/data/<파일명>`을 전달합니다. 이 폴더는 Compose에서 관리 MCP 컨테이너에만 연결됩니다.

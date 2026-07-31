@@ -109,13 +109,14 @@ required_patches = {
     "/ragflow/api/apps/__init__.py": ("max_content_length or None", "body_timeout or None"),
     "/ragflow/admin/server/admin_server.py": ("max_content_length or None",),
     "/ragflow/api/db/services/task_service.py": ("PADDLEOCR_TASK_PAGE_SIZE", "encrypted_pdf_page_count", "adaptive_pdf_task_page_size"),
-    "/ragflow/deepdoc/parser/paddleocr_parser.py": ("_slice_pdf_data", "from_page", "iter_lines"),
+    "/ragflow/deepdoc/parser/paddleocr_parser.py": ("_slice_pdf_data", "from_page", "iter_lines", "requests.delete(poll_url"),
     "/ragflow/rag/app/naive.py": ("fallback succeeded with embedded PDF text", "continuing with DeepDoc"),
     "/ragflow/rag/app/picture.py": ("creating an image chunk using its file name", "_try_local_ocr_text"),
-    "/ragflow/rag/svr/task_executor.py": ("prepare_document_for_parsing", "parser_filename", "task_lease", "LIG_DOCUMENT_MAX_BYTES"),
+    "/ragflow/rag/svr/task_executor.py": ("prepare_document_for_parsing", "parser_filename", "task_lease", "_watch_canceled_tasks", "before lease acquisition", "TASK_PENDING_CLAIM_IDLE_SECONDS", "claim_stale_message", "canceled for task", "TaskStatus.CANCEL.value", "LIG_DOCUMENT_MAX_BYTES"),
+    "/ragflow/rag/utils/redis_conn.py": ("def claim_stale_message", "xautoclaim", "def refresh(self):"),
+    "/ragflow/rag/svr/task_executor_refactor/chunk_builder.py": ("prepare_document_for_parsing", "except TaskCanceledException"),
     "/ragflow/rag/svr/task_executor_refactor/embedding_service.py": ("min(i + self._embedding_batch_size",),
     "/ragflow/rag/svr/task_executor_refactor/dataflow_service.py": ("async def _embed_chunks",),
-    "/ragflow/rag/utils/redis_conn.py": ("def refresh(self):",),
     "/ragflow/api/db/joint_services/tenant_model_service.py": ("for env_instance in TenantModelInstanceService", "get_by_provider_id_and_instance_name"),
     "/ragflow/rag/llm/ocr_model.py": ("env_managed", "return os.environ[env_key]"),
 }
@@ -126,6 +127,10 @@ for filename, markers in required_patches.items():
 
 import msoffcrypto  # noqa: F401
 import olefile  # noqa: F401
+from lig_runtime import service_health
+
+assert callable(service_health.api_ready)
+assert callable(service_health.tcp_ready)
 
 print("RAGFlow runtime password, parser fallback, and packaged dependency checks passed.")
 '@
@@ -143,6 +148,8 @@ assert any(0xAC00 <= ord(character) <= 0xD7A3 for character in app.recognition_c
 assert app._pdf_render_scale(1000, 1000) == app.RENDER_SCALE
 assert app.MAX_UPLOAD_BYTES == 0
 assert app.MAX_PDF_PAGES == 0
+assert any(rule.rule == "/api/v2/ocr/jobs/<job_id>" and "DELETE" in rule.methods for rule in app.app.url_map.iter_rules())
+assert app.OcrJobCanceled
 assert all(providers[0] == "CPUExecutionProvider" for providers in app.OCR_SESSION_PROVIDERS.values())
 scale = app._pdf_render_scale(app.MAX_PAGE_PIXELS, 2)
 assert scale < 1.0

@@ -249,7 +249,7 @@ function Assert-LigConfiguration {
     if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1) {
         throw "TASK_EXECUTOR_WORKERS must be a positive integer. Current value: $workerValue"
     }
-    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS", "MAX_CONCURRENT_TASKS", "MAX_CONCURRENT_CHUNK_BUILDERS", "TASK_LEASE_SECONDS", "LIG_INGESTION_MEMORY_RESERVE_BYTES", "LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", "PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL")) {
+    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS", "MAX_CONCURRENT_TASKS", "MAX_CONCURRENT_CHUNK_BUILDERS", "TASK_LEASE_SECONDS", "TASK_CANCEL_GRACE_SECONDS", "TASK_CANCEL_POLL_SECONDS", "TASK_PENDING_CLAIM_IDLE_SECONDS", "LIG_INGESTION_MEMORY_RESERVE_BYTES", "LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", "PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL")) {
         $settingValue = Get-ConfigurationValue $configuration $settingName
         if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
         [long]$parsed = 0
@@ -280,6 +280,31 @@ function Protect-DiagnosticText([string]$Text) {
     return $protected
 }
 
+function Test-McpInitialize([string]$Url, [string]$BearerToken = "") {
+    $headers = @{ Accept = "application/json, text/event-stream" }
+    if ($BearerToken) { $headers["Authorization"] = "Bearer $BearerToken" }
+    $body = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"lig-diagnostics","version":"1"}}}'
+    try {
+        $response = Invoke-WebRequest -Uri $Url -Method Post -Headers $headers -ContentType "application/json" -Body $body -UseBasicParsing -TimeoutSec 10
+        return [pscustomobject]@{
+            Reachable = $true
+            StatusCode = [int]$response.StatusCode
+            SessionCreated = [bool]$response.Headers["Mcp-Session-Id"]
+            Error = $null
+        }
+    }
+    catch {
+        $statusCode = $null
+        if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+        return [pscustomobject]@{
+            Reachable = $false
+            StatusCode = $statusCode
+            SessionCreated = $false
+            Error = Protect-DiagnosticText $_.Exception.Message
+        }
+    }
+}
+
 function Invoke-Diagnostics {
     $configuration = Get-EnvFileValues $ligEnvFile
     $secrets = Get-EnvFileValues $secretFile
@@ -290,6 +315,18 @@ function Invoke-Diagnostics {
         throw "SVR_HTTP_PORT must end with a numeric port. Current value: $apiBinding"
     }
     $apiBase = "http://127.0.0.1:$apiPort"
+    $uiBinding = Get-ConfigurationValue $configuration "SVR_WEB_HTTP_PORT" "127.0.0.1:42300"
+    $officialMcpBinding = Get-ConfigurationValue $configuration "SVR_MCP_PORT" "127.0.0.1:42303"
+    $managementMcpBinding = Get-ConfigurationValue $configuration "RAGFLOW_MCP_LIG_PORT" "127.0.0.1:42306"
+    $uiPort = ($uiBinding -split ':')[-1]
+    $officialMcpPort = ($officialMcpBinding -split ':')[-1]
+    $managementMcpPort = ($managementMcpBinding -split ':')[-1]
+    foreach ($binding in @($uiPort, $officialMcpPort, $managementMcpPort)) {
+        if ($binding -notmatch '^\d+$') { throw "Configured service port must be numeric. Current value: $binding" }
+    }
+    $uiUrl = "http://127.0.0.1:$uiPort/"
+    $officialMcpUrl = "http://127.0.0.1:$officialMcpPort/mcp"
+    $managementMcpUrl = "http://127.0.0.1:$managementMcpPort/mcp"
     $apiReachable = $false
     $serviceHealth = $null
     $healthDetail = $null
@@ -319,6 +356,8 @@ function Invoke-Diagnostics {
     elseif ($apiReachable) {
         $healthDetail = "RAGFlow API is reachable; configure RAGFLOW_MCP_API_KEY for authenticated dependency details."
     }
+    $officialMcpProbe = Test-McpInitialize $officialMcpUrl
+    $managementMcpProbe = Test-McpInitialize $managementMcpUrl $(if ($hasUsableApiKey) { $apiKey } else { "" })
 
     $composeResult = Invoke-DockerCapture -Arguments (@($composeArguments) + @("ps", "--format", "json")) -AllowFailure
     $composeRows = @($composeResult.Lines | ForEach-Object {
@@ -371,6 +410,17 @@ function Invoke-Diagnostics {
     $heartbeats = @()
     if ($serviceHealth -and $serviceHealth.task_executor_heartbeats) {
         $heartbeats = @($serviceHealth.task_executor_heartbeats.PSObject.Properties | ForEach-Object {
+            $samples = @($_.Value)
+            $latest = $samples | Select-Object -Last 1
+            if ($latest -is [string]) {
+                try { $latest = $latest | ConvertFrom-Json } catch { $latest = $null }
+            }
+            $currentTaskIds = [Collections.Generic.List[string]]::new()
+            if ($latest -and $latest.current) {
+                foreach ($taskId in $latest.current.PSObject.Properties.Name) {
+                    $currentTaskIds.Add([string]$taskId)
+                }
+            }
             [pscustomobject]@{
                 Worker = $_.Name
                 CurrentContainer = [bool](
@@ -378,7 +428,13 @@ function Invoke-Diagnostics {
                     ($ragflowHostname -and $_.Name -match [regex]::Escape($ragflowHostname)) -or
                     $_.Name -match '^task_executor(?:_[a-z0-9-]+)*_lig-(cpu|gpu)-worker_'
                 )
-                SamplesInLast30Minutes = @($_.Value).Count
+                SamplesInLast30Minutes = $samples.Count
+                LastSeen = if ($latest) { $latest.now } else { $null }
+                GroupPending = if ($latest) { $latest.pending } else { $null }
+                GroupLag = if ($latest) { $latest.lag } else { $null }
+                CurrentTaskIds = $currentTaskIds.ToArray()
+                Done = if ($latest) { $latest.done } else { $null }
+                Failed = if ($latest) { $latest.failed } else { $null }
             }
         })
     }
@@ -388,6 +444,17 @@ function Invoke-Diagnostics {
         DockerServerVersion = $dockerServerVersion
         DockerError = $dockerError
         ApiReachable = $apiReachable
+        Endpoints = [pscustomobject]@{
+            Ui = $uiUrl
+            Api = $apiBase
+            OfficialMcp = $officialMcpUrl
+            ManagementMcp = $managementMcpUrl
+        }
+        Connectivity = [pscustomobject]@{
+            ApiPing = $apiReachable
+            OfficialMcp = $officialMcpProbe
+            ManagementMcp = $managementMcpProbe
+        }
         Configuration = [pscustomobject]@{
             Device = Get-ConfigurationValue $configuration "DEVICE"
             ApiProxyScheme = Get-ConfigurationValue $configuration "API_PROXY_SCHEME" "python"

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import app as ocr_app
 
@@ -72,6 +74,38 @@ class OcrJobLifecycleTests(unittest.TestCase):
             ocr_app.MIN_FREE_BYTES + ocr_app.OCR_BYTES_PER_PIXEL * 2_000_000
         )
         self.assertEqual(budget, min(ocr_app.MAX_PAGE_PIXELS, 2_000_000 // ocr_app.JOB_WORKERS))
+
+    def test_memory_wait_stops_when_job_is_canceled(self) -> None:
+        cancel_event = threading.Event()
+        cancel_event.set()
+        with self.assertRaisesRegex(ocr_app.OcrJobCanceled, "canceled"):
+            ocr_app._wait_for_memory(cancel_event)
+
+    def test_cancel_endpoint_signals_running_job(self) -> None:
+        cancel_event = threading.Event()
+        future = MagicMock()
+        future.cancel.return_value = False
+        with ocr_app.jobs_lock:
+            ocr_app.jobs["running-job"] = {
+                "state": "running",
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "cancel_event": cancel_event,
+                "future": future,
+            }
+
+        async def cancel() -> tuple[int, dict]:
+            client = ocr_app.app.test_client()
+            response = await client.delete(
+                "/api/v2/ocr/jobs/running-job",
+                headers={"Authorization": f"Bearer {ocr_app.INTERNAL_TOKEN}"},
+            )
+            return response.status_code, await response.get_json()
+
+        status, payload = asyncio.run(cancel())
+        self.assertEqual(status, 202)
+        self.assertEqual(payload["data"]["state"], "canceling")
+        self.assertTrue(cancel_event.is_set())
 
     def test_pdf_render_scale_does_not_double_scale_or_reject_large_pages(self) -> None:
         self.assertEqual(ocr_app._pdf_render_scale(1000, 1000), ocr_app.RENDER_SCALE)
