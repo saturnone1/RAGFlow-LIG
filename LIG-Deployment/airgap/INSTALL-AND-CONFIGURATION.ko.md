@@ -174,7 +174,9 @@ RAGFlow 웹 UI의 `설정 → 모델 공급자`에서 다음 값을 등록합니
 
 `http://127.0.0.1:42317`은 Windows 호스트의 점검 주소입니다. RAGFlow는 Docker 네트워크 내부 주소인 `http://qwen3-embedding:8080`을 사용해야 합니다. 어댑터는 검색 질의에만 Qwen 권장 instruction을 붙이고 문서 청크에는 붙이지 않습니다.
 
-`.env.lig`의 `EMBEDDING_BATCH_SIZE=16`은 요청 한 건에 담는 텍스트 수이며 공급자 요청 제한시간은 300초입니다. 각 텍스트는 청크 크기가 아니라 RAGFlow에 등록한 임베딩 모델의 "최대 토큰"(권장 2048)으로 잘리므로, 한 요청의 최악값은 16 × 2048 = 32768 토큰입니다. `qwen3-embedding-tei`의 `--max-batch-tokens 32768`이 이를 그대로 수용합니다. 두 값은 반드시 함께 조정해야 하며 `--max-batch-tokens`는 항상 `EMBEDDING_BATCH_SIZE × 최대 토큰` 이상이어야 합니다. 요청이 예산을 넘으면 TEI가 이를 거부합니다. `EMBEDDING_MAX_CONCURRENT_REQUESTS=4`는 어댑터가 TEI로 동시에 넘기는 요청 수입니다. 어댑터는 문서 처리와 사용자 검색 질의를 함께 받으므로, 이 값이 1이면 검색이 진행 중인 문서 처리 배치 뒤에서 대기합니다. TEI 자체의 `--max-concurrent-requests 8`이 상한을 지킵니다. `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 backend 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않습니다. CPU 코어, 메모리 또는 전체 처리량에 상한을 거는 설정이 아닙니다.
+`.env.lig`의 `MAX_CONCURRENT_EMBEDDERS=4`는 한 작업이 동시에 보내는 임베딩 배치 수이며 처리량을 결정하는 값입니다. 12코어 호스트 측정 기준 텍스트 4개짜리 요청 16건이 순차 실행에서 81.98초, 동시 4에서 11.22초로 **7.3배** 차이가 났습니다. 순차 실행은 12코어 중 2개만 사용합니다. 문제가 생기면 `1`로 되돌리면 재빌드 없이 기존 동작으로 복귀합니다.
+
+`EMBEDDING_BATCH_SIZE=4`는 요청 한 건에 담는 텍스트 수이고 공급자 요청 제한시간은 300초입니다. 이 값과 `qwen3-embedding-tei`의 `--max-batch-tokens 2048`은 올려도 처리량이 늘지 않습니다. 같은 호스트에서 예산 2048·4096·8192의 배속이 모두 7.3배로 동일했고 절대 시간은 2048이 가장 빨랐습니다. 반면 기동 시 메모리는 2048에서 3.3GB, 8192에서 15.3GB, 32768에서 20GB 이상으로 치솟아 Docker 엔진이 컨테이너 조회에 실패할 정도의 압박을 유발했습니다. 워밍업 이후 상주 메모리는 어느 값이든 약 2.35GB로 같습니다. 즉 이 값을 올리는 것은 기동 스파이크만 키우므로 그대로 두십시오. `EMBEDDING_MAX_CONCURRENT_REQUESTS=4`는 어댑터가 TEI로 동시에 넘기는 요청 수입니다. 어댑터는 문서 처리와 사용자 검색 질의를 함께 받으므로, 이 값이 1이면 검색이 진행 중인 문서 처리 배치 뒤에서 대기합니다. TEI 자체의 `--max-concurrent-requests 8`이 상한을 지킵니다. `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 backend 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않습니다. CPU 코어, 메모리 또는 전체 처리량에 상한을 거는 설정이 아닙니다.
 
 DeepDoc/PaddleOCR GPU와 이 embedding 서비스는 별개입니다. Qwen3는 CPU에서 실행되므로 12 GiB GPU VRAM을 사용하지 않지만, Docker 시스템 RAM을 유휴 상태에서 약 1.5 GiB 추가 사용합니다. Compose는 임의의 CPU·RAM 상한을 두지 않습니다.
 

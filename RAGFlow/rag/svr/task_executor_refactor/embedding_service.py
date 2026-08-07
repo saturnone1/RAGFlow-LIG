@@ -19,6 +19,7 @@ Embedding Service Module.
 Provides [`EmbeddingService`](rag/svr/task_executor_refactor/embedding_service.py:42) for vector embedding operations.
 """
 
+import asyncio
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -87,20 +88,29 @@ class EmbeddingService:
         else:
             tts = None
 
-        # Batch encode contents using EmbeddingUtils
-        vects_batches = []
-        for i in range(0, len(contents), self._embedding_batch_size):
-            batch = contents[i : i + self._embedding_batch_size]
+        # Batch encode contents using EmbeddingUtils. Batches are dispatched
+        # together so the backend can group them into one forward pass;
+        # embed_limiter bounds how many are actually in flight, and at 1 this
+        # behaves exactly like the sequential loop it replaces.
+        embedded = 0
+
+        async def encode_at(start: int):
+            nonlocal embedded
+            batch = contents[start : start + self._embedding_batch_size]
             async with self._task_context.embed_limiter:
                 vts, c = await thread_pool_exec(
                     self._batch_encode_wrapper,
                     [truncate(t, embedding_model.max_length - 10) for t in batch],
                     embedding_model,
                 )
-            vects_batches.append(vts)
-            tk_count += c
+            embedded += len(batch)
             if self._task_context.progress_cb:
-                self._task_context.progress_cb(prog=0.7 + 0.2 * (i + 1) / len(contents), msg="")
+                self._task_context.progress_cb(prog=0.7 + 0.2 * embedded / len(contents), msg="")
+            return vts, c
+
+        results = await asyncio.gather(*[encode_at(start) for start in range(0, len(contents), self._embedding_batch_size)])
+        vects_batches = [vts for vts, _ in results]
+        tk_count += sum(c for _, c in results)
 
         # Stack vectors using EmbeddingUtils
         cnts = EmbeddingUtils.stack_vectors(vects_batches)

@@ -20,9 +20,14 @@ from common.asyncio_utils import LoopLocalSemaphore
 MAX_CONCURRENT_TASKS = int(os.environ.get("MAX_CONCURRENT_TASKS", "5"))
 MAX_CONCURRENT_CHUNK_BUILDERS = int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "1"))
 MAX_CONCURRENT_MINIO = int(os.environ.get("MAX_CONCURRENT_MINIO", "10"))
+# Parser concurrency and embedding concurrency pull in opposite directions: the
+# first divides the memory budget for page batching, the second decides how many
+# requests the embedding backend can group into one forward pass. Defaulting to
+# the parser value keeps the previous behaviour when this is not set.
+MAX_CONCURRENT_EMBEDDERS = int(os.environ.get("MAX_CONCURRENT_EMBEDDERS", str(MAX_CONCURRENT_CHUNK_BUILDERS)))
 
 task_limiter = LoopLocalSemaphore(MAX_CONCURRENT_TASKS)
 chunk_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
-embed_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)
+embed_limiter = LoopLocalSemaphore(MAX_CONCURRENT_EMBEDDERS)
 minio_limiter = LoopLocalSemaphore(MAX_CONCURRENT_MINIO)
 kg_limiter = LoopLocalSemaphore(2)

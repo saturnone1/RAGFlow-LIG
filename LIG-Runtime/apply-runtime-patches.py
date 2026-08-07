@@ -34,6 +34,7 @@ EXPECTED_OCR_MODEL_SHA256 = "9901a48f98423fc5a765985595dbc31cd246b5f76869eac9603
 EXPECTED_INFINITY_CONN_SHA256 = "85cb001ff451960331731785fa7d13e69c1017b37f2f967dee77e65523b76baa"
 EXPECTED_INFINITY_CONN_BASE_SHA256 = "d3a1dfd788ab657c82a5711cb4a6e0e4c9c6c605e4451b6283473c72ddd5cfde"
 EXPECTED_DOCUMENT_SERVICE_SHA256 = "02cf6c5e9a1732d7ee5bb2fb094cb8661bdab31aa2ee5fee5876003cc77734b5"
+EXPECTED_TASK_EXECUTOR_LIMITER_SHA256 = "9d71b0c22e56b5c7e6b333a80aa83ce9de844f3c0a5ef4e65755660b67d54354"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
 NEW_TIMEOUT = (
     'headers={"Content-Type": "application/json"}, '
@@ -56,7 +57,7 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 28:
+    if len(sys.argv) != 29:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
@@ -66,7 +67,8 @@ def main() -> None:
             "<picture.py> <refactored_chunk_service.py> <email.py> "
             "<redis_conn.py> <tenant_model_service.py> <api_apps_init.py> <admin_server.py> "
             "<embedding_service.py> <dataflow_service.py> <ocr_model.py> "
-            "<infinity_conn.py> <infinity_conn_base.py> <document_service.py>"
+            "<infinity_conn.py> <infinity_conn_base.py> <document_service.py> "
+            "<task_executor_limiter.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -1599,14 +1601,81 @@ def main() -> None:
     text = embedding_service_target.read_text(encoding="utf-8")
     text = replace_once(
         text,
+        "from typing import Any, Dict, List, Tuple\n",
+        "import asyncio\nfrom typing import Any, Dict, List, Tuple\n",
+        "refactored embedding asyncio import",
+    )
+    # The upstream loop awaits each batch in turn, so the embedding backend never
+    # sees more than one request and cannot group them into a forward pass.
+    # Dispatch them together and let embed_limiter bound what is in flight.
+    text = replace_once(
+        text,
+        "        # Batch encode contents using EmbeddingUtils\n"
+        "        vects_batches = []\n"
+        "        for i in range(0, len(contents), self._embedding_batch_size):\n"
+        "            batch = contents[i : i + self._embedding_batch_size]\n"
+        "            async with self._task_context.embed_limiter:\n"
+        "                vts, c = await thread_pool_exec(\n"
+        "                    self._batch_encode_wrapper,\n"
+        "                    [truncate(t, embedding_model.max_length - 10) for t in batch],\n"
+        "                    embedding_model,\n"
+        "                )\n"
+        "            vects_batches.append(vts)\n"
+        "            tk_count += c\n"
+        "            if self._task_context.progress_cb:\n"
         '                self._task_context.progress_cb(prog=0.7 + 0.2 * (i + 1) / len(contents), msg="")\n',
-        "                self._task_context.progress_cb(\n"
-        "                    prog=0.7 + 0.2 * min(i + self._embedding_batch_size, len(contents)) / len(contents),\n"
-        '                    msg="",\n'
-        "                )\n",
-        "refactored embedding batch progress",
+        "        # Batch encode contents using EmbeddingUtils. Batches are dispatched\n"
+        "        # together so the backend can group them into one forward pass;\n"
+        "        # embed_limiter bounds how many are actually in flight, and at 1 this\n"
+        "        # behaves exactly like the sequential loop it replaces.\n"
+        "        embedded = 0\n\n"
+        "        async def encode_at(start: int):\n"
+        "            nonlocal embedded\n"
+        "            batch = contents[start : start + self._embedding_batch_size]\n"
+        "            async with self._task_context.embed_limiter:\n"
+        "                vts, c = await thread_pool_exec(\n"
+        "                    self._batch_encode_wrapper,\n"
+        "                    [truncate(t, embedding_model.max_length - 10) for t in batch],\n"
+        "                    embedding_model,\n"
+        "                )\n"
+        "            embedded += len(batch)\n"
+        "            if self._task_context.progress_cb:\n"
+        '                self._task_context.progress_cb(prog=0.7 + 0.2 * embedded / len(contents), msg="")\n'
+        "            return vts, c\n\n"
+        "        results = await asyncio.gather(*[encode_at(start) for start in range(0, len(contents), self._embedding_batch_size)])\n"
+        "        vects_batches = [vts for vts, _ in results]\n"
+        "        tk_count += sum(c for _, c in results)\n",
+        "concurrent refactored embedding batches",
     )
     embedding_service_target.write_text(text, encoding="utf-8")
+
+    # embed_limiter shared MAX_CONCURRENT_CHUNK_BUILDERS with the parser limiter,
+    # so embedding concurrency could not be raised without shrinking the memory
+    # budget that sizes OCR page batches.
+    limiter_target = checked_target(
+        Path(sys.argv[28]),
+        EXPECTED_TASK_EXECUTOR_LIMITER_SHA256,
+        "rag/svr/task_executor_limiter.py",
+    )
+    text = limiter_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        'MAX_CONCURRENT_MINIO = int(os.environ.get("MAX_CONCURRENT_MINIO", "10"))\n',
+        'MAX_CONCURRENT_MINIO = int(os.environ.get("MAX_CONCURRENT_MINIO", "10"))\n'
+        "# Parser concurrency and embedding concurrency pull in opposite directions: the\n"
+        "# first divides the memory budget for page batching, the second decides how many\n"
+        "# requests the embedding backend can group into one forward pass. Defaulting to\n"
+        "# the parser value keeps the previous behaviour when this is not set.\n"
+        'MAX_CONCURRENT_EMBEDDERS = int(os.environ.get("MAX_CONCURRENT_EMBEDDERS", str(MAX_CONCURRENT_CHUNK_BUILDERS)))\n',
+        "embedding concurrency setting",
+    )
+    text = replace_once(
+        text,
+        "embed_limiter = LoopLocalSemaphore(MAX_CONCURRENT_CHUNK_BUILDERS)\n",
+        "embed_limiter = LoopLocalSemaphore(MAX_CONCURRENT_EMBEDDERS)\n",
+        "embedding limiter decoupling",
+    )
+    limiter_target.write_text(text, encoding="utf-8")
 
     dataflow_service_target = checked_target(
         Path(sys.argv[23]),

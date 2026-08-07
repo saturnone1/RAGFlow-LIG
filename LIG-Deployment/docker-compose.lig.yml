@@ -335,13 +335,17 @@ services:
       - "8"
       - --max-batch-requests
       - "4"
-      # Must hold one full RAGFlow request in the worst case, or TEI rejects it.
-      # A request carries EMBEDDING_BATCH_SIZE texts, and each text is truncated
-      # to the "max tokens" registered for the embedding model in RAGFlow, not to
-      # chunk_token_num. Keep this at or above EMBEDDING_BATCH_SIZE x max tokens:
-      # 16 x 2048 = 32768 for the documented registration.
+      # Raising this buys nothing and costs a large start-up allocation. Measured
+      # on a 12-CPU 28 GiB VM, 16 requests of 4 texts, warm-up peak / wall time
+      # with 4 concurrent requests:
+      #   2048 ->  3.3 GB / 11.22s     4096 -> 5.8 GB / 11.37s
+      #   8192 -> 15.3 GB / 12.59s     32768 -> over 20 GB, engine unresponsive
+      # Throughput is flat across all of them because the speed-up comes from
+      # concurrent requests, not from grouping them into one forward pass, and
+      # the largest budget is the slowest. Steady-state memory is ~2.35 GB
+      # regardless; only the start-up spike moves.
       - --max-batch-tokens
-      - "32768"
+      - "2048"
       - --auto-truncate
       - --json-output
     networks:
