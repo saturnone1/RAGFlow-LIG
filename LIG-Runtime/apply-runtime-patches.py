@@ -1642,6 +1642,11 @@ def main() -> None:
         "            if self._task_context.progress_cb:\n"
         '                self._task_context.progress_cb(prog=0.7 + 0.2 * embedded / len(contents), msg="")\n'
         "            return vts, c\n\n"
+        "        # Let the first failure propagate rather than collecting exceptions:\n"
+        "        # gather marks the siblings' exceptions retrieved on its own, and the\n"
+        "        # encode itself runs in a thread pool that a cancellation cannot\n"
+        "        # interrupt, so waiting for them only delays unwinding past the\n"
+        "        # cancellation grace period.\n"
         "        results = await asyncio.gather(*[encode_at(start) for start in range(0, len(contents), self._embedding_batch_size)])\n"
         "        vects_batches = [vts for vts, _ in results]\n"
         "        tk_count += sum(c for _, c in results)\n",

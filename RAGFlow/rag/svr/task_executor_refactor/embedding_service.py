@@ -108,6 +108,11 @@ class EmbeddingService:
                 self._task_context.progress_cb(prog=0.7 + 0.2 * embedded / len(contents), msg="")
             return vts, c
 
+        # Let the first failure propagate rather than collecting exceptions:
+        # gather marks the siblings' exceptions retrieved on its own, and the
+        # encode itself runs in a thread pool that a cancellation cannot
+        # interrupt, so waiting for them only delays unwinding past the
+        # cancellation grace period.
         results = await asyncio.gather(*[encode_at(start) for start in range(0, len(contents), self._embedding_batch_size)])
         vects_batches = [vts for vts, _ in results]
         tk_count += sum(c for _, c in results)
