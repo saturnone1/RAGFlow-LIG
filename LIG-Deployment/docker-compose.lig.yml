@@ -331,8 +331,14 @@ services:
       - "80"
       - --tokenization-workers
       - "2"
+      # Raising this past 8 slows every concurrency level down by about half:
+      # 16 requests of 4 texts at 4-way concurrency took 11.36s at 8 and 96.95s
+      # at 16 on the same host. Leave it alone.
       - --max-concurrent-requests
       - "8"
+      # MAX_CONCURRENT_EMBEDDERS in .env.lig must match this: TEI waits to fill
+      # a batch of this many requests before dispatching, so a client sending
+      # fewer at a time pays the wait on every request.
       - --max-batch-requests
       - "4"
       # Raising this buys nothing and costs a large start-up allocation. Measured
