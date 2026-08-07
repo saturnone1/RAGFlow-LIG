@@ -55,13 +55,13 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | Convert
 if ($manifest.bundleFormat -ne 9) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
-if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-2") {
+if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-3") {
     throw "Unsupported or missing UI image in manifest: $($manifest.uiImage)"
 }
-if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-2") {
+if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-3") {
     throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
 }
-if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-2") {
+if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-3") {
     throw "Unsupported or missing Korean OCR image in manifest: $($manifest.ocrImage)"
 }
 foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
@@ -69,8 +69,8 @@ foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.oc
 }
 if ($Device -eq "gpu") {
     if (-not $manifest.gpuIncluded) { throw "This bundle does not include GPU images. Export it again with -IncludeGpu." }
-    if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-2") { throw "Unsupported GPU UI image: $($manifest.gpuUiImage)" }
-    if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-2") { throw "Unsupported GPU OCR image: $($manifest.gpuOcrImage)" }
+    if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-3") { throw "Unsupported GPU UI image: $($manifest.gpuUiImage)" }
+    if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-3") { throw "Unsupported GPU OCR image: $($manifest.gpuOcrImage)" }
     foreach ($requiredImage in @($manifest.gpuUiImage, $manifest.gpuOcrImage)) {
         if ($requiredImage -notin @($manifest.images)) { throw "Required GPU image is absent from manifest images: $requiredImage" }
     }

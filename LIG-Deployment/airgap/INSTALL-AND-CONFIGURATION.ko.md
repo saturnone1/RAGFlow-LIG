@@ -174,7 +174,7 @@ RAGFlow 웹 UI의 `설정 → 모델 공급자`에서 다음 값을 등록합니
 
 `http://127.0.0.1:42317`은 Windows 호스트의 점검 주소입니다. RAGFlow는 Docker 네트워크 내부 주소인 `http://qwen3-embedding:8080`을 사용해야 합니다. 어댑터는 검색 질의에만 Qwen 권장 instruction을 붙이고 문서 청크에는 붙이지 않습니다.
 
-`.env.lig`의 `EMBEDDING_BATCH_SIZE=4`는 CPU TEI backend가 강제하는 최대 batch request 수와 일치하며 공급자 요청 제한시간은 300초입니다. `EMBEDDING_MAX_CONCURRENT_REQUESTS=1`은 동시에 들어온 요청을 실패시키지 않고 순서대로 기다리게 해 TEI backend 재시작을 방지하고, `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 backend 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않습니다. CPU 코어, 메모리 또는 전체 처리량에 상한을 거는 설정이 아닙니다.
+`.env.lig`의 `EMBEDDING_BATCH_SIZE=16`은 요청 한 건에 담는 텍스트 수이며 공급자 요청 제한시간은 300초입니다. 각 텍스트는 청크 크기가 아니라 RAGFlow에 등록한 임베딩 모델의 "최대 토큰"(권장 2048)으로 잘리므로, 한 요청의 최악값은 16 × 2048 = 32768 토큰입니다. `qwen3-embedding-tei`의 `--max-batch-tokens 32768`이 이를 그대로 수용합니다. 두 값은 반드시 함께 조정해야 하며 `--max-batch-tokens`는 항상 `EMBEDDING_BATCH_SIZE × 최대 토큰` 이상이어야 합니다. 요청이 예산을 넘으면 TEI가 이를 거부합니다. `EMBEDDING_MAX_CONCURRENT_REQUESTS=4`는 어댑터가 TEI로 동시에 넘기는 요청 수입니다. 어댑터는 문서 처리와 사용자 검색 질의를 함께 받으므로, 이 값이 1이면 검색이 진행 중인 문서 처리 배치 뒤에서 대기합니다. TEI 자체의 `--max-concurrent-requests 8`이 상한을 지킵니다. `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 backend 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않습니다. CPU 코어, 메모리 또는 전체 처리량에 상한을 거는 설정이 아닙니다.
 
 DeepDoc/PaddleOCR GPU와 이 embedding 서비스는 별개입니다. Qwen3는 CPU에서 실행되므로 12 GiB GPU VRAM을 사용하지 않지만, Docker 시스템 RAM을 유휴 상태에서 약 1.5 GiB 추가 사용합니다. Compose는 임의의 CPU·RAM 상한을 두지 않습니다.
 

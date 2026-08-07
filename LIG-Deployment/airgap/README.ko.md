@@ -81,11 +81,11 @@ RAGFlow 컨테이너 안에서 접근 가능한 주소여야 하며, 모델명�
 
 ## 구성 내용
 
-- `lig/ragflow-ui:v0.26.4-2` 커스텀 UI 이미지
-- `lig/ragflow-ui-gpu:v0.26.4-2` CUDA 12.8·cuDNN 9 커스텀 UI 이미지(`-IncludeGpu` 번들만)
-- `lig/ragflow-mcp:v0.26.4-2` LIG 관리 MCP 이미지
-- `lig/paddleocr-ko:v0.26.4-2` 한국어 PP-OCRv5 CPU 이미지
-- `lig/paddleocr-ko-gpu:v0.26.4-2` 한국어 PP-OCRv5 CUDA 이미지(`-IncludeGpu` 번들만)
+- `lig/ragflow-ui:v0.26.4-3` 커스텀 UI 이미지
+- `lig/ragflow-ui-gpu:v0.26.4-3` CUDA 12.8·cuDNN 9 커스텀 UI 이미지(`-IncludeGpu` 번들만)
+- `lig/ragflow-mcp:v0.26.4-3` LIG 관리 MCP 이미지
+- `lig/paddleocr-ko:v0.26.4-3` 한국어 PP-OCRv5 CPU 이미지
+- `lig/paddleocr-ko-gpu:v0.26.4-3` 한국어 PP-OCRv5 CUDA 이미지(`-IncludeGpu` 번들만)
 - `lig/qwen3-embedding-tei:0.6b-1` Qwen3 0.6B 모델 내장 TEI CPU 이미지(`-IncludeEmbedding` 번들만)
 - `lig/qwen3-embedding-adapter:0.6b-1` RAGFlow 질의 instruction 어댑터(`-IncludeEmbedding` 번들만)
 - `infiniflow/ragflow:v0.26.4` 롤백 이미지

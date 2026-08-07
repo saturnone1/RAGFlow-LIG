@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=lig/ragflow-ui:v0.26.4-2
+ARG BASE_IMAGE=lig/ragflow-ui:v0.26.4-3
 FROM ${BASE_IMAGE}
 
 USER root

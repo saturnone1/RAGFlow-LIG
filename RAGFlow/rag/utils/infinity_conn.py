@@ -355,12 +355,7 @@ class InfinityConnection(InfinityConnectionBase):
                 table_name = index_name
             else:
                 table_name = f"{index_name}_{knowledgebase_id}"
-            try:
-                table_instance = db_instance.get_table(table_name)
-            except InfinityException as e:
-                # src/common/status.cppm, kTableNotExist = 3022
-                if e.error_code != ErrorCode.TABLE_NOT_EXIST:
-                    raise
+            if table_name not in db_instance.list_tables().table_names:
                 vector_size = 0
                 patt = re.compile(r"q_(?P<vector_size>\d+)_vec")
                 for k in documents[0].keys():
@@ -380,10 +375,10 @@ class InfinityConnection(InfinityConnectionBase):
                     parser_id = ParserType.TABLE.value
                     self.logger.debug("Detected TABLE parser from document structure")
 
-                # Fallback: Create table with base schema (shouldn't normally happen as init_kb() creates it)
-                self.logger.debug(f"Fallback: Creating table {table_name} with base schema, parser_id: {parser_id}")
+                # init_kb() normally creates the table before any insert reaches here.
+                self.logger.warning(f"Creating missing table {table_name} with base schema, parser_id: {parser_id}")
                 self.create_idx(index_name, knowledgebase_id, vector_size, parser_id)
-                table_instance = db_instance.get_table(table_name)
+            table_instance = db_instance.get_table(table_name)
 
             # embedding fields can't have a default value....
             embedding_clmns = []

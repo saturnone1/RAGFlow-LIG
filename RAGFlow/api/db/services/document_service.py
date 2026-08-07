@@ -38,6 +38,23 @@ from common.time_utils import current_timestamp, get_format_time
 from rag.nlp import search
 from rag.utils.redis_conn import REDIS_CONN
 
+# MySQL TEXT holds 65535 bytes. Leave headroom so a multi-byte tail can never
+# push the column over the limit and fail the whole write.
+DOC_PROGRESS_MSG_MAX_BYTES = 60000
+
+
+def trim_tail_by_bytes(text: str, max_bytes: int) -> str:
+    """Keep the most recent whole lines of text that fit in max_bytes of UTF-8."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    tail = encoded[-max_bytes:]
+    # "\n" is ASCII, so cutting after one lands on a character boundary.
+    newline = tail.find(b"\n")
+    if newline >= 0:
+        tail = tail[newline + 1 :]
+    return tail.decode("utf-8", errors="ignore")
+
 
 class DocumentService(CommonService):
     model = Document
@@ -996,22 +1013,31 @@ class DocumentService(CommonService):
                 if prg != 0 and not freeze_progress:
                     info["progress"] = prg
                 if msg:
-                    info["progress_msg"] = msg
+                    progress_msg = msg
                     if msg.endswith("created task graphrag") or msg.endswith("created task raptor") or msg.endswith("created task mindmap"):
                         # Exclude this document's own queued tasks in the same
                         # priority queue: they are not "ahead" of itself, they
                         # ARE the work being waited on.
                         queue_ahead = max(0, get_queue_length(priority) - own_queued_by_priority.get(priority, 0))
-                        info["progress_msg"] += "\n%d tasks are ahead in the queue..." % queue_ahead
+                        progress_msg += "\n%d tasks are ahead in the queue..." % queue_ahead
                 else:
                     queue_ahead = max(0, get_queue_length(priority) - own_queued_by_priority.get(priority, 0))
-                    info["progress_msg"] = "%d tasks are ahead in the queue..." % queue_ahead
+                    progress_msg = "%d tasks are ahead in the queue..." % queue_ahead
                 info["update_time"] = current_timestamp()
                 info["update_date"] = get_format_time()
-                (cls.model.update(info).where((cls.model.id == d["id"]) & ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value))).execute())
+                not_canceled = (cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value)
+                cls.model.update(info).where((cls.model.id == d["id"]) & not_canceled).execute()
+                # progress_msg concatenates every task's log, so a document split
+                # into many page-range tasks produces megabytes of text against a
+                # 64 KiB TEXT column. Write it separately from the progress fields
+                # and trim it, so an oversized log can never stall progress.
+                try:
+                    cls.model.update(progress_msg=trim_tail_by_bytes(progress_msg, DOC_PROGRESS_MSG_MAX_BYTES)).where((cls.model.id == d["id"]) & not_canceled).execute()
+                except Exception:
+                    logging.exception("update progress_msg failed for document %s", d["id"])
             except Exception as e:
                 if str(e).find("'0'") < 0:
-                    logging.exception("fetch task exception")
+                    logging.exception("update document progress failed for %s: %s", d["id"], e)
 
     @classmethod
     @DB.connection_context()

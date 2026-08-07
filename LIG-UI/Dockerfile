@@ -63,6 +63,9 @@ RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/rag/svr/task_executor_refactor/embedding_service.py \
         /ragflow/rag/svr/task_executor_refactor/dataflow_service.py \
         /ragflow/rag/llm/ocr_model.py \
+        /ragflow/rag/utils/infinity_conn.py \
+        /ragflow/common/doc_store/infinity_conn_base.py \
+        /ragflow/api/db/services/document_service.py \
     && rm /tmp/apply-lig-runtime-patches.py
 RUN sed -i 's/client_max_body_size 1024M;/client_max_body_size 0;/' /etc/nginx/nginx.conf \
     && grep -q 'client_max_body_size 0;' /etc/nginx/nginx.conf

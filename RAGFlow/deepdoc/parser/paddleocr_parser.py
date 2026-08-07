@@ -14,11 +14,13 @@
 #
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 import tempfile
+import threading
 import time
 from dataclasses import asdict, dataclass, field, fields
 from io import BytesIO
@@ -43,6 +45,32 @@ except Exception:
 
 
 from deepdoc.parser.utils import extract_pdf_outlines
+
+
+_OUTLINE_CACHE_LOCK = threading.Lock()
+_OUTLINE_CACHE: dict[str, list] = {}
+
+
+def cached_pdf_outlines(source):
+    """Extract PDF outlines once per document instead of once per page-range task.
+
+    pypdf resolves every outline entry with a linear scan over the page list, so
+    a long document costs O(outlines x pages) each time. The result depends only
+    on the bytes and is an immutable list of tuples, so it is safe to share.
+    """
+    if not isinstance(source, (bytes, bytearray)):
+        return extract_pdf_outlines(source)
+    key = hashlib.sha256(source).hexdigest()
+    with _OUTLINE_CACHE_LOCK:
+        cached = _OUTLINE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    outlines = extract_pdf_outlines(source)
+    with _OUTLINE_CACHE_LOCK:
+        # Tasks run one document at a time, so a single entry is all that hits.
+        _OUTLINE_CACHE.clear()
+        _OUTLINE_CACHE[key] = outlines
+    return outlines
 
 
 AlgorithmType = Literal["PaddleOCR-VL", "PaddleOCR-VL-1.6", "PP-OCRv5", "PP-OCRv6", "PP-StructureV3", "PaddleOCR-VL-1.5"]
@@ -275,7 +303,7 @@ class PaddleOCRParser(RAGFlowPdfParser):
         **kwargs: Any,
     ) -> ParseResult:
         """Parse PDF document using PaddleOCR API."""
-        self.outlines = extract_pdf_outlines(binary if binary is not None else filepath)
+        self.outlines = cached_pdf_outlines(binary if binary is not None else filepath)
         config_dict = {
             "base_url": base_url if base_url is not None else self.base_url,
             "access_token": access_token if access_token is not None else self.access_token,
@@ -306,10 +334,11 @@ class PaddleOCRParser(RAGFlowPdfParser):
         data_bytes = self._prepare_file_data(filepath, binary)
         data_bytes = self._slice_pdf_data(data_bytes, from_page, to_page)
 
-        # Generate page images for cropping functionality
-        input_source = filepath if binary is None else binary
+        # Generate page images for cropping functionality. Feeding the sliced
+        # range keeps this off the full document: otherwise every page-range
+        # task of a large PDF re-parses the whole file to render a few pages.
         try:
-            self.__images__(input_source, page_from=from_page, page_to=to_page, callback=callback)
+            self.__images__(data_bytes, page_from=from_page, page_to=to_page, callback=callback)
         except Exception as e:
             self.logger.warning(f"[PaddleOCR] Failed to generate page images for cropping: {e}")
 
@@ -655,13 +684,17 @@ class PaddleOCRParser(RAGFlowPdfParser):
         return []
 
     def __images__(self, fnm, page_from=0, page_to=MAXIMUM_PAGE_NUMBER, callback=None):
-        """Generate page images from PDF for cropping."""
+        """Generate page images from PDF for cropping.
+
+        fnm holds only the pages of the current task, so it is indexed from 0
+        while page_from stays the absolute page number the position tags need.
+        """
         self.page_from = page_from
         self.page_to = page_to
         try:
             with pdfplumber.open(fnm) if isinstance(fnm, (str, PathLike)) else pdfplumber.open(BytesIO(fnm)) as pdf:
                 self.pdf = pdf
-                self.page_images = [p.to_image(resolution=72, antialias=True).original for i, p in enumerate(self.pdf.pages[page_from:page_to])]
+                self.page_images = [p.to_image(resolution=72, antialias=True).original for p in self.pdf.pages[: page_to - page_from]]
         except Exception as e:
             self.page_images = None
             self.logger.exception(e)

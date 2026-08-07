@@ -1,7 +1,7 @@
 param(
-    [string]$RagFlowImage = "lig/ragflow-ui:v0.26.4-2",
-    [string]$PaddleOcrImage = "lig/paddleocr-ko:v0.26.4-2",
-    [string]$McpImage = "lig/ragflow-mcp:v0.26.4-2"
+    [string]$RagFlowImage = "lig/ragflow-ui:v0.26.4-3",
+    [string]$PaddleOcrImage = "lig/paddleocr-ko:v0.26.4-3",
+    [string]$McpImage = "lig/ragflow-mcp:v0.26.4-3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,7 +109,10 @@ required_patches = {
     "/ragflow/api/apps/__init__.py": ("max_content_length or None", "body_timeout or None"),
     "/ragflow/admin/server/admin_server.py": ("max_content_length or None",),
     "/ragflow/api/db/services/task_service.py": ("PADDLEOCR_TASK_PAGE_SIZE", "encrypted_pdf_page_count", "adaptive_pdf_task_page_size"),
-    "/ragflow/deepdoc/parser/paddleocr_parser.py": ("_slice_pdf_data", "from_page", "iter_lines", "requests.delete(poll_url"),
+    "/ragflow/deepdoc/parser/paddleocr_parser.py": ("_slice_pdf_data", "from_page", "iter_lines", "requests.delete(poll_url", "cached_pdf_outlines", "self.__images__(data_bytes", "page_to - page_from"),
+    "/ragflow/rag/utils/infinity_conn.py": ("list_tables().table_names",),
+    "/ragflow/common/doc_store/infinity_conn_base.py": ("return table_name in db_instance.list_tables().table_names",),
+    "/ragflow/api/db/services/document_service.py": ("DOC_PROGRESS_MSG_MAX_BYTES", "def trim_tail_by_bytes", "update progress_msg failed for document"),
     "/ragflow/rag/app/naive.py": ("fallback succeeded with embedded PDF text", "continuing with DeepDoc"),
     "/ragflow/rag/app/picture.py": ("creating an image chunk using its file name", "_try_local_ocr_text"),
     "/ragflow/rag/svr/task_executor.py": ("prepare_document_for_parsing", "parser_filename", "task_lease", "_watch_canceled_tasks", "before lease acquisition", "TASK_PENDING_CLAIM_IDLE_SECONDS", "claim_stale_message", "canceled for task", "TaskStatus.CANCEL.value", "LIG_DOCUMENT_MAX_BYTES"),

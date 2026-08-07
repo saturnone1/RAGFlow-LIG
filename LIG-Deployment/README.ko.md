@@ -89,7 +89,7 @@ NVIDIA API 키는 Compose 파일이나 저장소에 기록하지 않고 RAGFlow 
 .\lig-ragflow.ps1 embedding-test
 ```
 
-RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Base URL `http://qwen3-embedding:8080`, 유형 `Embedding`, 최대 토큰 `2048`로 등록합니다. Docker 호스트에서 직접 시험할 때만 `http://127.0.0.1:42317`을 사용합니다. CPU 추론의 공급자 요청 제한시간은 300초이며 `.env.lig`의 `EMBEDDING_BATCH_SIZE=4`를 사용합니다. CPU TEI backend가 실제로 강제하는 최대 batch request 수와 일치해 긴 청크 요청이 제한시간에 가까워지는 것을 피합니다. `EMBEDDING_MAX_CONCURRENT_REQUESTS=1`은 초과 요청을 실패시키지 않고 어댑터에서 대기시키고, `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 TEI 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않고 명시적인 장애를 반환합니다. 이 값들은 CPU·RAM 사용량이나 문서 전체 크기의 상한이 아닙니다.
+RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Base URL `http://qwen3-embedding:8080`, 유형 `Embedding`, 최대 토큰 `2048`로 등록합니다. Docker 호스트에서 직접 시험할 때만 `http://127.0.0.1:42317`을 사용합니다. CPU 추론의 공급자 요청 제한시간은 300초이며 `.env.lig`의 `EMBEDDING_BATCH_SIZE=16`을 사용합니다. 각 텍스트는 위에서 등록한 최대 토큰 `2048`로 잘리므로 한 요청의 최악값은 16 × 2048 = 32768 토큰이며, `qwen3-embedding-tei`의 `--max-batch-tokens 32768`이 이를 수용합니다. `--max-batch-tokens`는 항상 `EMBEDDING_BATCH_SIZE × 최대 토큰` 이상이어야 하고, 넘으면 TEI가 요청을 거부합니다. `EMBEDDING_MAX_CONCURRENT_REQUESTS=4`는 어댑터가 문서 처리와 사용자 검색 질의를 동시에 넘길 수 있게 해 검색이 처리 중인 배치 뒤에서 대기하지 않게 하고, `HUGGINGFACE_EMBEDDING_MAX_RETRIES=0`은 문서 처리 중 일시적인 TEI 재기동에도 제한 횟수 없이 재연결합니다. 대화 검색은 `HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES=3`으로 무한 대기하지 않고 명시적인 장애를 반환합니다. 이 값들은 CPU·RAM 사용량이나 문서 전체 크기의 상한이 아닙니다.
 
 상태와 로그는 다음처럼 확인합니다.
 

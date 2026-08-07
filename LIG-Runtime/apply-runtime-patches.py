@@ -31,6 +31,9 @@ EXPECTED_ADMIN_SERVER_SHA256 = "399040a01af13adf69d49eb444d62fe508ae212cf8d095f6
 EXPECTED_EMBEDDING_SERVICE_SHA256 = "7937e5de77f8badc953fb476b0f81e986532a9d8f8da17de10818182ec9a3ea2"
 EXPECTED_DATAFLOW_SERVICE_SHA256 = "b6c0b874a555d27cce7989a93644b1cb171575d3b895d4b246d85baececc7e62"
 EXPECTED_OCR_MODEL_SHA256 = "9901a48f98423fc5a765985595dbc31cd246b5f76869eac9603d74c3e559b627"
+EXPECTED_INFINITY_CONN_SHA256 = "85cb001ff451960331731785fa7d13e69c1017b37f2f967dee77e65523b76baa"
+EXPECTED_INFINITY_CONN_BASE_SHA256 = "d3a1dfd788ab657c82a5711cb4a6e0e4c9c6c605e4451b6283473c72ddd5cfde"
+EXPECTED_DOCUMENT_SERVICE_SHA256 = "02cf6c5e9a1732d7ee5bb2fb094cb8661bdab31aa2ee5fee5876003cc77734b5"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
 NEW_TIMEOUT = (
     'headers={"Content-Type": "application/json"}, '
@@ -53,7 +56,7 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 25:
+    if len(sys.argv) != 28:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
@@ -62,7 +65,8 @@ def main() -> None:
             "<refactored_chunk_builder.py> <refactored_task_handler.py> <naive.py> "
             "<picture.py> <refactored_chunk_service.py> <email.py> "
             "<redis_conn.py> <tenant_model_service.py> <api_apps_init.py> <admin_server.py> "
-            "<embedding_service.py> <dataflow_service.py> <ocr_model.py>"
+            "<embedding_service.py> <dataflow_service.py> <ocr_model.py> "
+            "<infinity_conn.py> <infinity_conn_base.py> <document_service.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -153,6 +157,45 @@ def main() -> None:
     )
     text = replace_once(
         text,
+        "import json\nimport logging\nimport os\nimport re\nimport tempfile\nimport time\n",
+        "import hashlib\nimport json\nimport logging\nimport os\nimport re\nimport tempfile\nimport threading\nimport time\n",
+        "PaddleOCR outline cache imports",
+    )
+    text = replace_once(
+        text,
+        "from deepdoc.parser.utils import extract_pdf_outlines\n",
+        "from deepdoc.parser.utils import extract_pdf_outlines\n\n\n"
+        "_OUTLINE_CACHE_LOCK = threading.Lock()\n"
+        "_OUTLINE_CACHE: dict[str, list] = {}\n\n\n"
+        "def cached_pdf_outlines(source):\n"
+        '    """Extract PDF outlines once per document instead of once per page-range task.\n\n'
+        "    pypdf resolves every outline entry with a linear scan over the page list, so\n"
+        "    a long document costs O(outlines x pages) each time. The result depends only\n"
+        "    on the bytes and is an immutable list of tuples, so it is safe to share.\n"
+        '    """\n'
+        "    if not isinstance(source, (bytes, bytearray)):\n"
+        "        return extract_pdf_outlines(source)\n"
+        "    key = hashlib.sha256(source).hexdigest()\n"
+        "    with _OUTLINE_CACHE_LOCK:\n"
+        "        cached = _OUTLINE_CACHE.get(key)\n"
+        "    if cached is not None:\n"
+        "        return cached\n"
+        "    outlines = extract_pdf_outlines(source)\n"
+        "    with _OUTLINE_CACHE_LOCK:\n"
+        "        # Tasks run one document at a time, so a single entry is all that hits.\n"
+        "        _OUTLINE_CACHE.clear()\n"
+        "        _OUTLINE_CACHE[key] = outlines\n"
+        "    return outlines\n",
+        "PaddleOCR outline cache helper",
+    )
+    text = replace_once(
+        text,
+        "        self.outlines = extract_pdf_outlines(binary if binary is not None else filepath)\n",
+        "        self.outlines = cached_pdf_outlines(binary if binary is not None else filepath)\n",
+        "PaddleOCR cached outline lookup",
+    )
+    text = replace_once(
+        text,
         "        callback: Optional[Callable[[float, str], None]] = None,\n"
         "        *,\n"
         '        parse_method: str = "raw",\n',
@@ -166,17 +209,37 @@ def main() -> None:
     text = replace_once(
         text,
         "        data_bytes = self._prepare_file_data(filepath, binary)\n\n"
-        "        # Generate page images for cropping functionality\n",
+        "        # Generate page images for cropping functionality\n"
+        "        input_source = filepath if binary is None else binary\n",
         "        data_bytes = self._prepare_file_data(filepath, binary)\n"
         "        data_bytes = self._slice_pdf_data(data_bytes, from_page, to_page)\n\n"
-        "        # Generate page images for cropping functionality\n",
+        "        # Generate page images for cropping functionality. Feeding the sliced\n"
+        "        # range keeps this off the full document: otherwise every page-range\n"
+        "        # task of a large PDF re-parses the whole file to render a few pages.\n",
         "PaddleOCR task page slicing",
     )
     text = replace_once(
         text,
         "            self.__images__(input_source, callback=callback)\n",
-        "            self.__images__(input_source, page_from=from_page, page_to=to_page, callback=callback)\n",
+        "            self.__images__(data_bytes, page_from=from_page, page_to=to_page, callback=callback)\n",
         "PaddleOCR task page images",
+    )
+    text = replace_once(
+        text,
+        '        """Generate page images from PDF for cropping."""\n'
+        "        self.page_from = page_from\n",
+        '        """Generate page images from PDF for cropping.\n\n'
+        "        fnm holds only the pages of the current task, so it is indexed from 0\n"
+        "        while page_from stays the absolute page number the position tags need.\n"
+        '        """\n'
+        "        self.page_from = page_from\n",
+        "PaddleOCR sliced page image docstring",
+    )
+    text = replace_once(
+        text,
+        "                self.page_images = [p.to_image(resolution=72, antialias=True).original for i, p in enumerate(self.pdf.pages[page_from:page_to])]\n",
+        "                self.page_images = [p.to_image(resolution=72, antialias=True).original for p in self.pdf.pages[: page_to - page_from]]\n",
+        "PaddleOCR sliced page image indexing",
     )
     text = replace_once(
         text,
@@ -1577,6 +1640,138 @@ def main() -> None:
         "environment-managed PaddleOCR credentials",
     )
     ocr_model_target.write_text(text, encoding="utf-8")
+
+    # Infinity returns a table handle without contacting the server, so "does this
+    # table exist" must be answered from list_tables() instead of from whether
+    # get_table() raises. Otherwise every index_exist() guard reports True for a
+    # missing table and the failure surfaces later as "Table ... doesn't exist".
+    infinity_conn_target = checked_target(
+        Path(sys.argv[25]),
+        EXPECTED_INFINITY_CONN_SHA256,
+        "rag/utils/infinity_conn.py",
+    )
+    text = infinity_conn_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "            try:\n"
+        "                table_instance = db_instance.get_table(table_name)\n"
+        "            except InfinityException as e:\n"
+        "                # src/common/status.cppm, kTableNotExist = 3022\n"
+        "                if e.error_code != ErrorCode.TABLE_NOT_EXIST:\n"
+        "                    raise\n"
+        "                vector_size = 0\n",
+        "            if table_name not in db_instance.list_tables().table_names:\n"
+        "                vector_size = 0\n",
+        "infinity insert table existence check",
+    )
+    text = replace_once(
+        text,
+        "                # Fallback: Create table with base schema (shouldn't normally happen as init_kb() creates it)\n"
+        '                self.logger.debug(f"Fallback: Creating table {table_name} with base schema, parser_id: {parser_id}")\n'
+        "                self.create_idx(index_name, knowledgebase_id, vector_size, parser_id)\n"
+        "                table_instance = db_instance.get_table(table_name)\n",
+        "                # init_kb() normally creates the table before any insert reaches here.\n"
+        '                self.logger.warning(f"Creating missing table {table_name} with base schema, parser_id: {parser_id}")\n'
+        "                self.create_idx(index_name, knowledgebase_id, vector_size, parser_id)\n"
+        "            table_instance = db_instance.get_table(table_name)\n",
+        "infinity insert missing table creation",
+    )
+    infinity_conn_target.write_text(text, encoding="utf-8")
+
+    infinity_conn_base_target = checked_target(
+        Path(sys.argv[26]),
+        EXPECTED_INFINITY_CONN_BASE_SHA256,
+        "common/doc_store/infinity_conn_base.py",
+    )
+    text = infinity_conn_base_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "            db_instance = inf_conn.get_database(self.dbName)\n"
+        "            _ = db_instance.get_table(table_name)\n"
+        "            return True\n"
+        "        except Exception as e:\n"
+        '            self.logger.warning(f"INFINITY indexExist {str(e)}")\n',
+        "            db_instance = inf_conn.get_database(self.dbName)\n"
+        "            return table_name in db_instance.list_tables().table_names\n"
+        "        except Exception as e:\n"
+        '            self.logger.warning(f"INFINITY index_exist {str(e)}")\n',
+        "infinity index_exist table listing",
+    )
+    infinity_conn_base_target.write_text(text, encoding="utf-8")
+
+    # A document split into many page-range tasks aggregates every task log into
+    # one TEXT column. Past 64 KiB the whole row update fails, which froze both
+    # the log and the progress percentage for the rest of the run.
+    document_service_target = checked_target(
+        Path(sys.argv[27]),
+        EXPECTED_DOCUMENT_SERVICE_SHA256,
+        "api/db/services/document_service.py",
+    )
+    text = document_service_target.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "from rag.nlp import search\n"
+        "from rag.utils.redis_conn import REDIS_CONN\n",
+        "from rag.nlp import search\n"
+        "from rag.utils.redis_conn import REDIS_CONN\n\n"
+        "# MySQL TEXT holds 65535 bytes. Leave headroom so a multi-byte tail can never\n"
+        "# push the column over the limit and fail the whole write.\n"
+        "DOC_PROGRESS_MSG_MAX_BYTES = 60000\n\n\n"
+        "def trim_tail_by_bytes(text: str, max_bytes: int) -> str:\n"
+        '    """Keep the most recent whole lines of text that fit in max_bytes of UTF-8."""\n'
+        '    encoded = text.encode("utf-8")\n'
+        "    if len(encoded) <= max_bytes:\n"
+        "        return text\n"
+        "    tail = encoded[-max_bytes:]\n"
+        '    # "\\n" is ASCII, so cutting after one lands on a character boundary.\n'
+        '    newline = tail.find(b"\\n")\n'
+        "    if newline >= 0:\n"
+        "        tail = tail[newline + 1 :]\n"
+        '    return tail.decode("utf-8", errors="ignore")\n',
+        "document progress message trimming helper",
+    )
+    text = replace_once(
+        text,
+        "                if msg:\n"
+        '                    info["progress_msg"] = msg\n',
+        "                if msg:\n"
+        "                    progress_msg = msg\n",
+        "document progress message split assignment",
+    )
+    text = replace_once(
+        text,
+        '                        info["progress_msg"] += "\\n%d tasks are ahead in the queue..." % queue_ahead\n',
+        '                        progress_msg += "\\n%d tasks are ahead in the queue..." % queue_ahead\n',
+        "document progress message split append",
+    )
+    text = replace_once(
+        text,
+        '                    info["progress_msg"] = "%d tasks are ahead in the queue..." % queue_ahead\n',
+        '                    progress_msg = "%d tasks are ahead in the queue..." % queue_ahead\n',
+        "document progress message split fallback",
+    )
+    text = replace_once(
+        text,
+        "                (cls.model.update(info).where((cls.model.id == d[\"id\"]) & ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value))).execute())\n"
+        "            except Exception as e:\n"
+        "                if str(e).find(\"'0'\") < 0:\n"
+        '                    logging.exception("fetch task exception")\n',
+        "                not_canceled = (cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value)\n"
+        '                cls.model.update(info).where((cls.model.id == d["id"]) & not_canceled).execute()\n'
+        "                # progress_msg concatenates every task's log, so a document split\n"
+        "                # into many page-range tasks produces megabytes of text against a\n"
+        "                # 64 KiB TEXT column. Write it separately from the progress fields\n"
+        "                # and trim it, so an oversized log can never stall progress.\n"
+        "                try:\n"
+        '                    cls.model.update(progress_msg=trim_tail_by_bytes(progress_msg, DOC_PROGRESS_MSG_MAX_BYTES)).where((cls.model.id == d["id"]) & not_canceled).execute()\n'
+        "                except Exception:\n"
+        '                    logging.exception("update progress_msg failed for document %s", d["id"])\n'
+        "            except Exception as e:\n"
+        "                if str(e).find(\"'0'\") < 0:\n"
+        '                    logging.exception("update document progress failed for %s: %s", d["id"], e)\n',
+        "document progress and log split write",
+    )
+    document_service_target.write_text(text, encoding="utf-8")
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:

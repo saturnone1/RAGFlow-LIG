@@ -599,10 +599,9 @@ class InfinityConnectionBase(DocStoreConnection):
         inf_conn = self.connPool.get_conn()
         try:
             db_instance = inf_conn.get_database(self.dbName)
-            _ = db_instance.get_table(table_name)
-            return True
+            return table_name in db_instance.list_tables().table_names
         except Exception as e:
-            self.logger.warning(f"INFINITY indexExist {str(e)}")
+            self.logger.warning(f"INFINITY index_exist {str(e)}")
             return False
         finally:
             self.connPool.release_conn(inf_conn)

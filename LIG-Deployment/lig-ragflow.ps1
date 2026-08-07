@@ -501,23 +501,23 @@ switch ($Action) {
     }
     "ui-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-2", $workspaceDirectory)
-        Write-Host "Built lig/ragflow-ui:v0.26.4-2"
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-3", $workspaceDirectory)
+        Write-Host "Built lig/ragflow-ui:v0.26.4-3"
     }
     "mcp-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-2", $mcpDirectory)
-        Write-Host "Built lig/ragflow-mcp:v0.26.4-2"
+        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-3", $mcpDirectory)
+        Write-Host "Built lig/ragflow-mcp:v0.26.4-3"
     }
     "ocr-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-2", $ocrDirectory)
-        Write-Host "Built lig/paddleocr-ko:v0.26.4-2"
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-3", $ocrDirectory)
+        Write-Host "Built lig/paddleocr-ko:v0.26.4-3"
     }
     "gpu-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $gpuUiDockerfile, "--tag", "lig/ragflow-ui-gpu:v0.26.4-2", $workspaceDirectory)
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-2", "--tag", "lig/paddleocr-ko-gpu:v0.26.4-2", $ocrDirectory)
+        Invoke-Docker @("build", "--file", $gpuUiDockerfile, "--tag", "lig/ragflow-ui-gpu:v0.26.4-3", $workspaceDirectory)
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-3", "--tag", "lig/paddleocr-ko-gpu:v0.26.4-3", $ocrDirectory)
         Write-Host "Built LIG CUDA 12.8 RAGFlow and Korean PaddleOCR images."
     }
     "embedding-build" {
@@ -528,9 +528,9 @@ switch ($Action) {
     }
     "build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-2", $workspaceDirectory)
-        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-2", $mcpDirectory)
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-2", $ocrDirectory)
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-3", $workspaceDirectory)
+        Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-3", $mcpDirectory)
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-3", $ocrDirectory)
         Write-Host "Built LIG UI, management MCP, and Korean PaddleOCR images."
     }
     "start" {
@@ -552,7 +552,7 @@ switch ($Action) {
         } else {
             Get-ConfigurationValue $configuration "PADDLEOCR_IMAGE"
         }
-        $mcpImage = Get-ConfigurationValue $configuration "RAGFLOW_MCP_LIG_IMAGE" "lig/ragflow-mcp:v0.26.4-2"
+        $mcpImage = Get-ConfigurationValue $configuration "RAGFLOW_MCP_LIG_IMAGE" "lig/ragflow-mcp:v0.26.4-3"
         foreach ($requiredImage in @($ragflowImage, $ocrImage, $mcpImage)) {
             if ([string]::IsNullOrWhiteSpace($requiredImage)) {
                 throw "Required $device image configuration is missing. Check RAGFLOW_IMAGE, RAGFLOW_GPU_IMAGE, PADDLEOCR_IMAGE, PADDLEOCR_GPU_IMAGE, and RAGFLOW_MCP_LIG_IMAGE."

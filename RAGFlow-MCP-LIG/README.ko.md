@@ -66,7 +66,7 @@ $env:RAGFLOW_WRITES_ENABLED='true'
 dotnet run --project src/RagFlowMcp.csproj
 ```
 
-기본 LIG 배포에서는 이 MCP가 `lig/ragflow-mcp:v0.26.4-2` 컨테이너로 RAGFlow와 함께 시작·중지됩니다. 다음 명령으로 두 커스텀 이미지를 만들고 전체 구성을 실행합니다.
+기본 LIG 배포에서는 이 MCP가 `lig/ragflow-mcp:v0.26.4-3` 컨테이너로 RAGFlow와 함께 시작·중지됩니다. 다음 명령으로 두 커스텀 이미지를 만들고 전체 구성을 실행합니다.
 
 ```powershell
 cd ..\LIG-Deployment

@@ -106,9 +106,9 @@ foreach ($bundleFile in $bundleFiles) {
 }
 
 $images = @(
-    "lig/ragflow-ui:v0.26.4-2",
-    "lig/ragflow-mcp:v0.26.4-2",
-    "lig/paddleocr-ko:v0.26.4-2",
+    "lig/ragflow-ui:v0.26.4-3",
+    "lig/ragflow-mcp:v0.26.4-3",
+    "lig/paddleocr-ko:v0.26.4-3",
     "infiniflow/ragflow:v0.26.4",
     "infiniflow/infinity:v0.7.0",
     "mysql:8.0.39",
@@ -116,7 +116,7 @@ $images = @(
     "valkey/valkey:8"
 )
 if ($IncludeGpu) {
-    $images += @("lig/ragflow-ui-gpu:v0.26.4-2", "lig/paddleocr-ko-gpu:v0.26.4-2")
+    $images += @("lig/ragflow-ui-gpu:v0.26.4-3", "lig/paddleocr-ko-gpu:v0.26.4-3")
 }
 foreach ($image in $images) {
     $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
@@ -249,12 +249,12 @@ $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Ob
 $manifest = [pscustomobject]@{
     bundleFormat = 9
     ragflowVersion = "v0.26.4"
-    uiImage = "lig/ragflow-ui:v0.26.4-2"
+    uiImage = "lig/ragflow-ui:v0.26.4-3"
     gpuIncluded = [bool]$IncludeGpu
-    gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-2" } else { $null }
-    mcpImage = "lig/ragflow-mcp:v0.26.4-2"
-    ocrImage = "lig/paddleocr-ko:v0.26.4-2"
-    gpuOcrImage = if ($IncludeGpu) { "lig/paddleocr-ko-gpu:v0.26.4-2" } else { $null }
+    gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-3" } else { $null }
+    mcpImage = "lig/ragflow-mcp:v0.26.4-3"
+    ocrImage = "lig/paddleocr-ko:v0.26.4-3"
+    gpuOcrImage = if ($IncludeGpu) { "lig/paddleocr-ko-gpu:v0.26.4-3" } else { $null }
     images = @($images)
     imageIds = $imageIds
     embeddingImages = @($embeddingImages)

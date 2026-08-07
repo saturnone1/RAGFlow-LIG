@@ -303,6 +303,19 @@ services:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
+    # RAGFlow uses Redis as the durable task queue, not as a cache. The upstream
+    # allkeys-lru policy lets Redis drop queued document tasks under memory
+    # pressure, and a dropped task has no requeue path: the document simply
+    # stops making progress. noeviction surfaces the pressure as a write error
+    # instead, and a large document queues one message per page range.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - noeviction
     logging: *lig-logging
 
   qwen3-embedding-tei:
@@ -322,8 +335,13 @@ services:
       - "8"
       - --max-batch-requests
       - "4"
+      # Must hold one full RAGFlow request in the worst case, or TEI rejects it.
+      # A request carries EMBEDDING_BATCH_SIZE texts, and each text is truncated
+      # to the "max tokens" registered for the embedding model in RAGFlow, not to
+      # chunk_token_num. Keep this at or above EMBEDDING_BATCH_SIZE x max tokens:
+      # 16 x 2048 = 32768 for the documented registration.
       - --max-batch-tokens
-      - "2048"
+      - "32768"
       - --auto-truncate
       - --json-output
     networks:

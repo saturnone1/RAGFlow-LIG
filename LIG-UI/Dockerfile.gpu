@@ -1,4 +1,4 @@
-ARG RAGFLOW_UI_IMAGE=lig/ragflow-ui:v0.26.4-2
+ARG RAGFLOW_UI_IMAGE=lig/ragflow-ui:v0.26.4-3
 FROM ${RAGFLOW_UI_IMAGE}
 
 USER root
