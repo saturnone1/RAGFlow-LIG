@@ -3,7 +3,8 @@ param(
     [string]$Destination,
     [string]$ExistingImageArchive,
     [switch]$IncludeGpu,
-    [switch]$IncludeEmbedding
+    [switch]$IncludeEmbedding,
+    [switch]$IncludePaddleOcrVl
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,6 +47,9 @@ function Invoke-DockerCapture([string[]]$Arguments, [switch]$AllowFailure) {
     return [pscustomobject]@{ ExitCode = $exitCode; Lines = $output }
 }
 $destinationPath = [IO.Path]::GetFullPath($Destination)
+if ($IncludePaddleOcrVl -and -not $IncludeGpu) {
+    throw "PaddleOCR-VL-1.6 공식 오프라인 구성은 NVIDIA GPU용입니다. -IncludeGpu도 함께 지정하십시오."
+}
 $deploymentDirectory = $PSScriptRoot
 $workspaceDirectory = Split-Path $deploymentDirectory -Parent
 $upstreamDockerDirectory = Join-Path $workspaceDirectory "RAGFlow\docker"
@@ -58,19 +62,23 @@ if (@(Get-ChildItem -LiteralPath $destinationPath -Force).Count -gt 0) {
     throw "Export destination must be empty to prevent stale files or secrets from entering the bundle: $destinationPath"
 }
 
-# Copy only the files required by the fixed Infinity CPU/GPU deployment. Secrets
-# and source code are intentionally excluded so the result is a portable runtime bundle.
+# 고정된 Infinity CPU/GPU 배포에 필요한 파일만 복사합니다. 휴대 가능한 실행
+# 번들이 되도록 비밀값과 소스 코드는 포함하지 않습니다.
 $bundleFiles = @(
     @{ Source = (Join-Path $bundleTemplateDirectory "install.ps1"); Target = "install.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "install-gpu.ps1"); Target = "install-gpu.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "install-embedding-cpu.ps1"); Target = "install-embedding-cpu.ps1" },
+    @{ Source = (Join-Path $bundleTemplateDirectory "install-paddleocr-vl.ps1"); Target = "install-paddleocr-vl.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "start.ps1"); Target = "start.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "start-gpu.ps1"); Target = "start-gpu.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "start-embedding-cpu.ps1"); Target = "start-embedding-cpu.ps1" },
+    @{ Source = (Join-Path $bundleTemplateDirectory "start-paddleocr-vl.ps1"); Target = "start-paddleocr-vl.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "stop.ps1"); Target = "stop.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "stop-embedding.ps1"); Target = "stop-embedding.ps1" },
+    @{ Source = (Join-Path $bundleTemplateDirectory "stop-paddleocr-vl.ps1"); Target = "stop-paddleocr-vl.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "status.ps1"); Target = "status.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "test-embedding.ps1"); Target = "test-embedding.ps1" },
+    @{ Source = (Join-Path $bundleTemplateDirectory "test-paddleocr-vl.ps1"); Target = "test-paddleocr-vl.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "verify-cpu-images.ps1"); Target = "verify-cpu-images.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "diagnostics.ps1"); Target = "diagnostics.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "diagnostics-gpu.ps1"); Target = "diagnostics-gpu.ps1" },
@@ -80,6 +88,7 @@ $bundleFiles = @(
     @{ Source = (Join-Path $deploymentDirectory "DOCUMENT-COMPATIBILITY.ko.md"); Target = "DOCUMENT-COMPATIBILITY.ko.md" },
     @{ Source = (Join-Path $deploymentDirectory "airgap-import.ps1"); Target = "LIG-Deployment\airgap-import.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "embedding-import.ps1"); Target = "LIG-Deployment\embedding-import.ps1" },
+    @{ Source = (Join-Path $deploymentDirectory "paddleocr-vl-import.ps1"); Target = "LIG-Deployment\paddleocr-vl-import.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "lig-ragflow.ps1"); Target = "LIG-Deployment\lig-ragflow.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "rotate-document-password-key.ps1"); Target = "LIG-Deployment\rotate-document-password-key.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "docker-compose.lig.yml"); Target = "LIG-Deployment\docker-compose.lig.yml" },
@@ -239,6 +248,46 @@ if ($IncludeEmbedding) {
     }
 }
 
+$paddleOcrVlImages = @()
+$paddleOcrVlImageIds = [ordered]@{}
+if ($IncludePaddleOcrVl) {
+    $configuration = @{}
+    foreach ($line in Get-Content -LiteralPath (Join-Path $deploymentDirectory ".env.lig") -Encoding UTF8) {
+        if ($line -match '^\s*([^#=]+?)\s*=\s*(.*)\s*$') { $configuration[$matches[1].Trim()] = $matches[2].Trim() }
+    }
+    $paddleOcrVlImages = @(
+        $configuration["PADDLEOCR_VL_API_IMAGE"],
+        $configuration["PADDLEOCR_VL_VLM_IMAGE"],
+        $configuration["PADDLEOCR_VL_GATEWAY_IMAGE"]
+    )
+    foreach ($image in $paddleOcrVlImages) {
+        if ([string]::IsNullOrWhiteSpace($image)) { throw "PaddleOCR-VL 이미지 설정이 비어 있습니다." }
+        $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+        if ($inspect.ExitCode -ne 0) { throw "선택한 PaddleOCR-VL 이미지가 없습니다: $image" }
+        $paddleOcrVlImageIds[$image] = ([string]($inspect.Lines | Where-Object { $_ -match '^sha256:[0-9a-fA-F]{64}$' } | Select-Object -Last 1)).Trim()
+        if (-not $paddleOcrVlImageIds[$image]) { throw "PaddleOCR-VL 이미지 ID를 확인하지 못했습니다: $image" }
+    }
+    $vlTar = Join-Path $destinationPath "lig-paddleocr-vl-1.6-images.tar"
+    $vlArchive = Join-Path $destinationPath "lig-paddleocr-vl-1.6-images.tar.gz"
+    Invoke-Docker (@("save", "--output", $vlTar) + $paddleOcrVlImages)
+    Write-Host "선택 PaddleOCR-VL-1.6 이미지 압축파일을 생성합니다."
+    $vlInput = $null
+    $vlOutput = $null
+    $vlGzip = $null
+    try {
+        $vlInput = [IO.File]::OpenRead($vlTar)
+        $vlOutput = [IO.File]::Create($vlArchive)
+        $vlGzip = [IO.Compression.GZipStream]::new($vlOutput, [IO.Compression.CompressionLevel]::Optimal, $false)
+        $vlInput.CopyTo($vlGzip, 1MB)
+    }
+    finally {
+        if ($null -ne $vlGzip) { $vlGzip.Dispose() }
+        if ($null -ne $vlOutput) { $vlOutput.Dispose() }
+        if ($null -ne $vlInput) { $vlInput.Dispose() }
+        if (Test-Path -LiteralPath $vlTar) { Remove-Item -LiteralPath $vlTar -Force }
+    }
+}
+
 $destinationPrefix = $destinationPath.TrimEnd('\') + '\'
 $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Object {
     $_.Name -ne "manifest.json"
@@ -263,6 +312,10 @@ $manifest = [pscustomobject]@{
     embeddingModel = if ($IncludeEmbedding) { "Qwen/Qwen3-Embedding-0.6B" } else { $null }
     embeddingModelRevision = if ($IncludeEmbedding) { "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3" } else { $null }
     embeddingRuntime = if ($IncludeEmbedding) { "TEI cpu-1.9" } else { $null }
+    paddleOcrVlIncluded = [bool]$IncludePaddleOcrVl
+    paddleOcrVlModel = if ($IncludePaddleOcrVl) { "PaddleOCR-VL-1.6" } else { $null }
+    paddleOcrVlImages = @($paddleOcrVlImages)
+    paddleOcrVlImageIds = $paddleOcrVlImageIds
     createdAt = (Get-Date).ToString("o")
     files = @($records)
 }

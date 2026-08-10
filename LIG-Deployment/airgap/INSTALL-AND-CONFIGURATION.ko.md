@@ -212,14 +212,39 @@ DeepDOC는 영어·중국어 문서와 표·레이아웃·좌표 처리용으로
 기본 성능 설정은 `LIG-Deployment\.env.lig`에 있습니다. 기본 `API_PROXY_SCHEME=python`은 문서 암호 처리와 OCR/청킹 보강이 모두 적용되는 실행 경로입니다. upstream Go/Hybrid 모드로 바꿀 수는 있지만 해당 LIG 확장 전체는 보장되지 않습니다.
 
 ```dotenv
-TASK_EXECUTOR_WORKERS=1
+TASK_EXECUTOR_WORKERS=3
+MAX_CONCURRENT_TASKS=1
+MAX_CONCURRENT_CHUNK_BUILDERS=1
+PDF_TASK_PAGE_SIZE=12
 ```
 
-API와 task executor는 별도 컨테이너입니다. 초기 task executor 수는 1이며 PDF는 최대 12쪽씩, 메모리가 부족하면 1쪽까지 자동 축소해 순차 처리합니다. 문서 크기·페이지 수 제한은 기본적으로 비활성화되어 있으므로 큰 문서는 느리더라도 계속 진행됩니다. 취소 신호를 받은 파서는 협력 중단하며, 네이티브 라이브러리나 외부 파서가 5초 이상 취소를 무시하면 API가 아니라 격리 task executor 프로세스만 자동 재기동합니다. 컨테이너 교체나 비정상 종료로 과거 consumer에 묶인 Redis pending은 기본 300초 유휴 후 현재 worker가 자동 인계하고, task lease를 확인한 뒤 종료 작업은 승인 처리하고 유효 작업은 이어서 수행합니다. 로컬 Qwen3 요청 제한시간은 300초이고 embedding batch는 4입니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
+API와 task executor는 별도 컨테이너입니다. CPU/PaddleOCR 기본 구성은 task executor 3개가 각각 task/parser 하나를 받아 PDF의 12쪽 범위 작업을 총 3개까지 병렬 처리합니다. `MAX_CONCURRENT_TASKS`와 `MAX_CONCURRENT_CHUNK_BUILDERS`는 worker당 값이므로 worker와 함께 모두 3으로 설정하면 최대 9개 파서가 열립니다. 데이터셋의 `task_page_size`가 `PDF_TASK_PAGE_SIZE`보다 우선합니다. 이 공통값은 DeepDOC, Plain Text, Docling 등 페이지 분할이 가능한 PDF 파서에 적용되고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE` 전송 상한이 추가 적용됩니다. `One`, 지식 그래프 및 목차 추출처럼 전체 문서 문맥이 필요한 모드는 분할하지 않습니다. 메모리가 부족하면 실제 동시 파서 수에 맞춰 1쪽까지 자동 축소합니다. 문서 크기·페이지 수 제한은 기본적으로 비활성화되어 있으므로 큰 문서는 느리더라도 계속 진행됩니다. 취소 신호를 받은 파서는 협력 중단하며, 네이티브 라이브러리나 외부 파서가 5초 이상 취소를 무시하면 API가 아니라 격리 task executor 프로세스만 자동 재기동합니다. 컨테이너 교체나 비정상 종료로 과거 consumer에 묶인 Redis pending은 기본 300초 유휴 후 현재 worker가 자동 인계하고, task lease를 확인한 뒤 종료 작업은 승인 처리하고 유효 작업은 이어서 수행합니다. 로컬 Qwen3 요청 제한시간은 300초이고 embedding batch는 4입니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
 
-GPU 설치 스크립트는 12 GiB VRAM에서 DeepDoc 모델이 작업 실행기마다 중복 적재되는 위험을 줄이기 위해 `TASK_EXECUTOR_WORKERS=1`을 적용합니다. 실제 GPU 모델과 VRAM 사용량을 측정한 뒤에만 2개로 올리십시오.
+GPU 설치·시작·진단 스크립트도 `.env.lig`의 `TASK_EXECUTOR_WORKERS`, `MAX_CONCURRENT_TASKS`, `MAX_CONCURRENT_CHUNK_BUILDERS`를 그대로 사용하며 별도 강제값을 적용하지 않습니다. DeepDOC는 worker마다 모델을 적재할 수 있으므로 GPU 메모리가 부족한 환경에서는 운영자가 `TASK_EXECUTOR_WORKERS=1`로 직접 낮춘 뒤 재시작하십시오.
 
 텍스트 선택이 가능한 대형 PDF에서 속도를 우선하면 데이터셋의 레이아웃 인식을 `Plain Text`로 시험합니다. 스캔 문서, 표, 다단 편집 품질이 중요하면 `DeepDOC`을 사용하되 CPU 처리에는 시간이 오래 걸릴 수 있습니다. 실행 중 같은 문서의 재처리를 반복하면 이전 작업이 정리되는 동안 UI 진행률 갱신이 지연될 수 있습니다.
+
+### 선택 설치: PaddleOCR-VL-1.6
+
+인터넷 연결 컴퓨터에서 번들을 만들 때 다음 옵션을 함께 지정하면 공식 PaddleOCR-VL-1.6 오프라인 GPU 이미지와 호환 게이트웨이가 별도 압축파일로 포함됩니다. 공식 원본 이미지가 약 10 GB와 15 GB이므로 충분한 디스크 공간을 확보하십시오.
+
+```powershell
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-pull
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-build
+pwsh LIG-Deployment/airgap-export.ps1 `
+  -Destination "D:\LIG-RAGFlow-Airgap" `
+  -IncludeGpu `
+  -IncludePaddleOcrVl
+```
+
+폐쇄망에서는 기본 GPU 설치를 완료한 다음 선택 설치 파일을 실행합니다.
+
+```powershell
+.\install-paddleocr-vl.ps1
+.\test-paddleocr-vl.ps1
+```
+
+데이터셋 설정에서는 기존 PaddleOCR와 동일하게 PDF 파서를 선택하고 모델만 `paddleocr-vl-from-env`로 지정합니다. 시작·중지·시험은 각각 `start-paddleocr-vl.ps1`, `stop-paddleocr-vl.ps1`, `test-paddleocr-vl.ps1`로 관리합니다. 일반 PaddleOCR와 PaddleOCR-VL은 별도 서비스이므로 둘 중 필요한 모델을 데이터셋마다 선택할 수 있습니다.
 
 ## 9. 정상 상태 확인
 

@@ -153,6 +153,15 @@ def main() -> None:
         text = text.replace(old_progress, new_progress)
     text = replace_once(
         text,
+        '        "PaddleOCR-VL": _VL_FIELD_MAPPING,\n'
+        '        "PP-OCRv5": _VL_FIELD_MAPPING,\n',
+        '        "PaddleOCR-VL": _VL_FIELD_MAPPING,\n'
+        '        "PaddleOCR-VL-1.6": _VL_FIELD_MAPPING,\n'
+        '        "PP-OCRv5": _VL_FIELD_MAPPING,\n',
+        "PaddleOCR-VL-1.6 option forwarding",
+    )
+    text = replace_once(
+        text,
         "from PIL import Image\n",
         "from PIL import Image\nfrom pypdf import PdfReader, PdfWriter\n",
         "PaddleOCR PDF page slicing imports",
@@ -979,8 +988,8 @@ def main() -> None:
     text = replace_once(
         text,
         '        page_size = doc["parser_config"].get("task_page_size") or 12\n',
-        '        page_size = max(1, int(doc["parser_config"].get("task_page_size") or 12))\n',
-        "PaddleOCR task page size cap",
+        '        page_size = max(1, int(doc["parser_config"].get("task_page_size") or os.environ.get("PDF_TASK_PAGE_SIZE", "12")))\n',
+        "global PDF task page size default",
     )
     text = replace_once(
         text,
@@ -989,7 +998,7 @@ def main() -> None:
         '        if doc["parser_id"] in ["one", "knowledge_graph"] or doc["parser_config"].get("toc_extraction", False):\n'
         '            page_size = MAXIMUM_TASK_PAGE_NUMBER\n',
         '        if doc["parser_id"] == "paper":\n'
-        '            page_size = max(1, int(doc["parser_config"].get("task_page_size") or 22))\n'
+        '            page_size = max(1, int(doc["parser_config"].get("task_page_size") or os.environ.get("PDF_TASK_PAGE_SIZE", "22")))\n'
         '        if doc["parser_id"] in ["one", "knowledge_graph"] or doc["parser_config"].get("toc_extraction", False):\n'
         '            page_size = MAXIMUM_TASK_PAGE_NUMBER\n'
         '        layout_recognizer, _ = normalize_layout_recognizer(doc["parser_config"].get("layout_recognize", "DeepDOC"))\n'
@@ -1536,6 +1545,29 @@ def main() -> None:
     text = tenant_model_target.read_text(encoding="utf-8")
     text = replace_once(
         text,
+        "def get_tenant_default_model_by_type(tenant_id: str, model_type: str | enum.Enum):\n",
+        "def ensure_paddleocr_vl_from_env(tenant_id: str) -> str | None:\n"
+        '    if os.environ.get("PADDLEOCR_VL_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:\n'
+        "        return None\n"
+        "    base_url = os.environ.get(\"PADDLEOCR_VL_BASE_URL\")\n"
+        "    access_token = os.environ.get(\"PADDLEOCR_ACCESS_TOKEN\")\n"
+        "    if not base_url or not access_token:\n"
+        "        return None\n"
+        "    config = dict(PADDLEOCR_DEFAULT_CONFIG)\n"
+        '    config["PADDLEOCR_BASE_URL"] = base_url\n'
+        '    config["PADDLEOCR_ACCESS_TOKEN"] = access_token\n'
+        '    config["PADDLEOCR_ALGORITHM"] = os.environ.get("PADDLEOCR_VL_MODEL", "PaddleOCR-VL-1.6")\n'
+        "    return _ensure_ocr_provider_from_env(\n"
+        "        tenant_id,\n"
+        '        "PaddleOCR",\n'
+        '        "paddleocr-vl-from-env",\n'
+        "        config,\n"
+        "    )\n\n\n"
+        "def get_tenant_default_model_by_type(tenant_id: str, model_type: str | enum.Enum):\n",
+        "environment-managed PaddleOCR-VL provider",
+    )
+    text = replace_once(
+        text,
         "    api_key = json.dumps(config)\n"
         "    instance_obj = TenantModelInstanceService.get_by_provider_id_and_api_key(provider_obj.id, api_key)\n"
         "    if not instance_obj:\n"
@@ -1557,9 +1589,8 @@ def main() -> None:
         "        instance_obj = TenantModelInstanceService.get_by_provider_id_and_instance_name(provider_obj.id, model_name)\n"
         "        if not instance_obj:\n"
         "            raise RuntimeError(f\"Failed to create {provider_name} model instance for tenant {tenant_id}\")\n"
-        "    for env_instance in TenantModelInstanceService.get_all_by_provider_id(provider_obj.id):\n"
-        "        if env_instance.api_key != api_key:\n"
-        "            TenantModelInstanceService.update_by_id(env_instance.id, {\"api_key\": api_key})\n\n",
+        "    if instance_obj.api_key != api_key:\n"
+        "        TenantModelInstanceService.update_by_id(instance_obj.id, {\"api_key\": api_key})\n\n",
         "environment-managed OCR provider refresh",
     )
     tenant_model_target.write_text(text, encoding="utf-8")
@@ -1704,12 +1735,17 @@ def main() -> None:
         "        def _resolve_config(key: str, env_key: str, default=\"\"):\n"
         "            # lower-case keys (UI), upper-case PADDLEOCR_* (env auto-provision), env vars\n"
         "            return config.get(key, config.get(env_key, os.environ.get(env_key, default)))\n",
-        "        env_managed = model_name == \"paddleocr-from-env\"\n\n"
+        '        env_managed = model_name in {"paddleocr-from-env", "paddleocr-vl-from-env"}\n'
+        '        vl_env_keys = {\n'
+        '            "PADDLEOCR_BASE_URL": "PADDLEOCR_VL_BASE_URL",\n'
+        '            "PADDLEOCR_ALGORITHM": "PADDLEOCR_VL_MODEL",\n'
+        '        } if model_name == "paddleocr-vl-from-env" else {}\n\n'
         "        def _resolve_config(key: str, env_key: str, default=\"\"):\n"
         "            # The bundled environment-managed provider follows the current\n"
         "            # container secret even when an older value remains in the database.\n"
-        "            if env_managed and os.environ.get(env_key):\n"
-        "                return os.environ[env_key]\n"
+        "            override_key = vl_env_keys.get(env_key, env_key)\n"
+        "            if env_managed and os.environ.get(override_key):\n"
+        "                return os.environ[override_key]\n"
         "            return config.get(key, config.get(env_key, os.environ.get(env_key, default)))\n",
         "environment-managed PaddleOCR credentials",
     )

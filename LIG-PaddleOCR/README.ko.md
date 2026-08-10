@@ -1,5 +1,7 @@
 # LIG 한국어 PaddleOCR 서비스
 
+복잡한 표·수식·차트·다국어 문서를 위한 선택형 `PaddleOCR-VL-1.6`은 `LIG-PaddleOCR-VL/`과 `LIG-Deployment`의 `paddleocr-vl-*` 관리 명령을 사용합니다. 기존 `paddleocr-from-env`와 새 `paddleocr-vl-from-env`는 RAGFlow에서 같은 방식으로 선택하며 서로 독립적으로 운영됩니다.
+
 RAGFlow가 기대하는 `/api/v2/ocr/jobs` 계약을 제공하는 내부 OCR 서비스입니다.
 
 - 인식: 공식 `korean_PP-OCRv5_mobile_rec` 계열 모델

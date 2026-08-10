@@ -164,17 +164,21 @@ def _render_ragflow_service_config() -> None:
 
 
 def _provision_ragflow_tenants() -> None:
-    """Register the env-backed OCR model for existing and newly created tenants."""
+    """Register environment-backed OCR models for existing and new tenants."""
     while not provisioner_stop.is_set():
         try:
             from api.db.db_models import Tenant
-            from api.db.joint_services.tenant_model_service import ensure_paddleocr_from_env
+            from api.db.joint_services.tenant_model_service import (
+                ensure_paddleocr_from_env,
+                ensure_paddleocr_vl_from_env,
+            )
 
             tenant_ids = [row.id for row in Tenant.select(Tenant.id).where(Tenant.status == "1")]
             for tenant_id in tenant_ids:
                 for attempt in range(2):
                     try:
                         ensure_paddleocr_from_env(tenant_id)
+                        ensure_paddleocr_vl_from_env(tenant_id)
                         break
                     except AttributeError:
                         # The first call can persist a new OCR instance before its
@@ -182,7 +186,7 @@ def _provision_ragflow_tenants() -> None:
                         if attempt:
                             raise
         except Exception:
-            app.logger.exception("Failed to provision the Korean OCR model")
+            app.logger.exception("Failed to provision environment-backed OCR models")
         _cleanup_jobs()
         provisioner_stop.wait(PROVISION_INTERVAL_SECONDS)
 

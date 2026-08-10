@@ -108,8 +108,8 @@ assert new_parser_config["layout_recognize"] == "PaddleOCR"
 required_patches = {
     "/ragflow/api/apps/__init__.py": ("max_content_length or None", "body_timeout or None"),
     "/ragflow/admin/server/admin_server.py": ("max_content_length or None",),
-    "/ragflow/api/db/services/task_service.py": ("PADDLEOCR_TASK_PAGE_SIZE", "encrypted_pdf_page_count", "adaptive_pdf_task_page_size"),
-    "/ragflow/deepdoc/parser/paddleocr_parser.py": ("_slice_pdf_data", "from_page", "iter_lines", "requests.delete(poll_url", "cached_pdf_outlines", "self.__images__(data_bytes", "page_to - page_from"),
+    "/ragflow/api/db/services/task_service.py": ("PDF_TASK_PAGE_SIZE", "PADDLEOCR_TASK_PAGE_SIZE", "encrypted_pdf_page_count", "adaptive_pdf_task_page_size"),
+    "/ragflow/deepdoc/parser/paddleocr_parser.py": ("_slice_pdf_data", "from_page", "iter_lines", "requests.delete(poll_url", "cached_pdf_outlines", "self.__images__(data_bytes", "page_to - page_from", '"PaddleOCR-VL-1.6": _VL_FIELD_MAPPING'),
     "/ragflow/rag/utils/infinity_conn.py": ("list_tables().table_names",),
     "/ragflow/common/doc_store/infinity_conn_base.py": ("return table_name in db_instance.list_tables().table_names",),
     "/ragflow/api/db/services/document_service.py": ("DOC_PROGRESS_MSG_MAX_BYTES", "def trim_tail_by_bytes", "update progress_msg failed for document"),
@@ -121,8 +121,8 @@ required_patches = {
     "/ragflow/rag/svr/task_executor_refactor/embedding_service.py": ("import asyncio", "async def encode_at", "asyncio.gather"),
     "/ragflow/rag/svr/task_executor_limiter.py": ("MAX_CONCURRENT_EMBEDDERS", "LoopLocalSemaphore(MAX_CONCURRENT_EMBEDDERS)"),
     "/ragflow/rag/svr/task_executor_refactor/dataflow_service.py": ("async def _embed_chunks",),
-    "/ragflow/api/db/joint_services/tenant_model_service.py": ("for env_instance in TenantModelInstanceService", "get_by_provider_id_and_instance_name"),
-    "/ragflow/rag/llm/ocr_model.py": ("env_managed", "return os.environ[env_key]"),
+    "/ragflow/api/db/joint_services/tenant_model_service.py": ("ensure_paddleocr_vl_from_env", "paddleocr-vl-from-env", "instance_obj.api_key != api_key", "get_by_provider_id_and_instance_name"),
+    "/ragflow/rag/llm/ocr_model.py": ("paddleocr-vl-from-env", "PADDLEOCR_VL_BASE_URL", "override_key"),
 }
 for filename, markers in required_patches.items():
     source = Path(filename).read_text(encoding="utf-8")

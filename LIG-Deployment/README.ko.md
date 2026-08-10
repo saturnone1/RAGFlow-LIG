@@ -13,15 +13,16 @@
 - 선택 설치 임베딩: TEI CPU 기반 `Qwen/Qwen3-Embedding-0.6B`(1024차원, 모델과 런타임을 별도 에어갭 아카이브에 포함)
 - 제외: Kibana, Sandbox, 별도 Docling 서비스
 - 포트: 모두 `127.0.0.1`에만 공개
-- 포트 블록: 다른 로컬 MCP 서버와 분리한 `42300`~`42317`
+- 포트 블록: 다른 로컬 MCP 서버와 분리한 `42300`~`42318`
 - 웹 UI: `http://127.0.0.1:42300`
 - REST API: `http://127.0.0.1:42301`
 - 공식 MCP: `http://127.0.0.1:42303/mcp`
 - LIG 관리 MCP: `http://127.0.0.1:42306/mcp`
 - 한국어 PaddleOCR 상태: `http://127.0.0.1:42316/health`
 - 선택형 Qwen3 임베딩 상태: `http://127.0.0.1:42317/health`
+- 선택형 PaddleOCR-VL 상태: `http://127.0.0.1:42318/health`
 - 로그: 컨테이너마다 최대 20 MiB 파일 3개
-- 동시 처리: CPU·GPU 모두 기본 task executor 1개. 작업은 거부하지 않고 대기시키며, 실제 메모리 여유를 확인한 뒤에만 worker 수를 늘림
+- 동시 처리: CPU·GPU 모두 기본 task executor 3개와 worker당 task/parser 슬롯 1개. 작업은 거부하지 않고 대기시키며, 실제 메모리·VRAM 사용량에 따라 운영자가 worker 수를 조정
 - 취소·장애 복구: 협력 가능한 파서는 즉시 중단하고, 네이티브/외부 파서가 취소를 무시하면 격리된 task executor 프로세스만 5초 후 재기동합니다. 컨테이너 교체로 이전 consumer에 남은 Redis pending 메시지는 5분 유휴 후 현재 worker가 자동 인계하며, 갱신형 task lease로 중복 실행을 막습니다.
 - 자원: Compose에서 컨테이너별 CPU·시스템 RAM 상한을 두지 않으며, upstream Infinity의 RAM 상한도 LIG 오버레이에서 해제. Docker Engine 또는 서버 운영 정책의 전체 자원 범위를 사용
 
@@ -46,6 +47,7 @@
 | `42314` | Infinity PostgreSQL 호환 포트 |
 | `42316` | 한국어 PaddleOCR API |
 | `42317` | 선택형 Qwen3 임베딩 API |
+| `42318` | 선택형 PaddleOCR-VL 호환 API |
 
 `LIG-Deployment/.env.lig`는 upstream 기본값을 덮어쓰고, `LIG-Deployment/docker-compose.lig.yml`은 로그 크기 상한과 LIG 서비스 구성을 추가합니다. 문서 암호 처리와 OCR/청킹 보강이 적용된 경로를 기본 사용하도록 `API_PROXY_SCHEME=python`을 설정합니다. upstream의 Go/Hybrid 모드를 명시적으로 선택하는 기능은 막지 않지만, 그 경로에서는 LIG 문서 암호와 OCR 보강 전체가 적용되지 않습니다. 컨테이너별 CPU·시스템 RAM 상한은 두지 않습니다. 로그 회전 상한은 디스크 고갈 방지 설정이므로 유지합니다. 공식 소스와 Compose는 `RAGFlow/` 아래에 원본 그대로 유지되며, 데이터는 named volume에 저장되므로 컨테이너를 다시 만들어도 유지됩니다.
 
@@ -118,7 +120,7 @@ RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Ba
 
 upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 LIG 기본 프로파일에는 포함하지 않으며, task executor 프로세스가 RAGFlow 이미지 안의 DeepDoc 모듈을 직접 호출합니다. `DEEPDOC_URL`을 사용한 독립 서비스 운영을 검증하지 않은 상태에서 `deepdoc` 프로파일만 켜도 ingestion이 자동 분리되지는 않습니다.
 
-한국어 스캔 PDF에는 별도 `paddleocr-cpu` 또는 `paddleocr-gpu` 서비스가 자동 실행됩니다. 이 서비스는 한국어·영어·숫자를 지원하는 PP-OCRv5 한국어 모델을 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. RAGFlow는 PDF를 `PADDLEOCR_TASK_PAGE_SIZE` 단위의 작업으로 나누고, 각 작업은 해당 페이지만 새 PDF로 구성해 OCR 서비스에 전송하므로 전체 원본을 작업마다 반복 처리하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되며 데이터셋 화면에서 별도로 입력하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
+한국어 스캔 PDF에는 별도 `paddleocr-cpu` 또는 `paddleocr-gpu` 서비스가 자동 실행됩니다. 이 서비스는 한국어·영어·숫자를 지원하는 PP-OCRv5 한국어 모델을 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. RAGFlow는 PDF를 데이터셋의 `task_page_size` 또는 전역 `PDF_TASK_PAGE_SIZE` 단위로 나누고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE` 상한을 추가 적용합니다. 각 작업은 해당 페이지만 새 PDF로 구성해 OCR 서비스에 전송하므로 전체 원본을 작업마다 반복 처리하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되며 데이터셋 화면에서 별도로 입력하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
 
 **파일 열기 암호**를 설정한 PDF, Word(`.docx`/`.doc`), Excel(`.xlsx`/`.xls`), PowerPoint(`.pptx`/`.ppt`) 및 HWPX는 업로드 창에서 파일별 비밀번호를 입력할 수 있습니다. 업로드 단계에서 암호를 검증한 뒤 원본 암호화 문서는 그대로 저장하고, 비밀번호는 `.env.secret`의 `LIG_DOCUMENT_PASSWORD_KEY`로 AES-256-GCM 암호화해 문서 설정에 보관합니다. 작업자는 파싱 직전에 메모리에서 문서를 복호화해 기존 파서로 전달합니다. HWPX는 한컴의 AES-256-CBC/PBKDF2 형식을 복호화하고 XML 본문을 텍스트로 변환하며, 일반 HWP 5와 HWPX도 텍스트 문서로 처리합니다. 잘못된 암호는 업로드 오류로 바로 표시되며, 문서의 청킹 방식 설정에서 새 암호를 저장하고 재실행할 수도 있습니다.
 
@@ -130,17 +132,42 @@ upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 
 
 DeepDOC는 삭제하지 않습니다. DeepDOC는 OCR뿐 아니라 레이아웃, 표, 좌표와 이미지 영역을 처리하며 영어·중국어 문서 및 복잡한 편집 문서에서 여전히 별도 가치가 있습니다. 한국어 스캔 문서에서는 DeepDOC 문자 사전에 한글이 없어 PaddleOCR를 사용합니다.
 
-API와 문서 작업기는 별도 컨테이너로 실행됩니다. 문서 작업기가 재시작되어도 웹/API와 데이터베이스가 함께 내려가지 않으며, 동일 작업에는 Redis lease를 사용해 중복 OCR을 막습니다. `TASK_EXECUTOR_WORKERS`의 초기값은 1입니다. 여러 문서의 병렬 처리가 반드시 필요하고 실제 메모리 여유를 확인한 경우에만 늘리십시오. worker마다 파서 모델 메모리가 중복됩니다.
+### 선택 설치: PaddleOCR-VL-1.6
+
+최신 복합 문서 파서인 `PaddleOCR-VL-1.6`도 기존 PaddleOCR과 함께 사용할 수 있습니다. 공식 오프라인 NVIDIA GPU pipeline 이미지와 vLLM 이미지, LIG 비동기 호환 게이트웨이의 세 컨테이너로 실행합니다. 공식 이미지의 표시 용량은 각각 약 10 GB와 15 GB이므로 기본 배포 용량을 늘리지 않도록 선택 설치로 분리했습니다.
+
+```powershell
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-pull
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-build
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-start
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-test
+```
+
+RAGFlow 데이터셋 설정에서 기존 PaddleOCR와 같은 방식으로 PDF 파서를 선택한 다음 모델을 `paddleocr-vl-from-env`로 지정합니다. 일반 한국어 OCR은 `paddleocr-from-env`, 복잡한 표·수식·차트·레이아웃과 다국어 문서는 `paddleocr-vl-from-env`를 우선 시험하십시오. 두 모델 모두 `PDF_TASK_PAGE_SIZE`와 데이터셋 `task_page_size`를 따르며 작업 제출·진행 조회·취소·결과 수집 방식도 같습니다.
+
+상태 확인과 중지는 다음과 같습니다.
+
+```powershell
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-status
+pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-stop
+```
+
+`PADDLEOCR_VL_JOB_WORKERS`, `PADDLEOCR_VL_MAX_PENDING_JOBS`, `PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS`는 `.env.lig`에서 변경합니다. 공식 구성은 NVIDIA GPU와 CUDA 12.6 이상 드라이버 환경을 대상으로 하며 pipeline API와 VLM 서버가 같은 GPU를 사용합니다.
+
+API와 문서 작업기는 별도 컨테이너로 실행됩니다. 문서 작업기가 재시작되어도 웹/API와 데이터베이스가 함께 내려가지 않으며, 동일 작업에는 Redis lease를 사용해 중복 OCR을 막습니다. CPU/PaddleOCR 기본값은 worker 3개와 worker당 task/parser 슬롯 1개이므로 페이지 범위 작업을 총 3개까지 병렬 처리합니다. `TASK_EXECUTOR_WORKERS=3`, `MAX_CONCURRENT_TASKS=3`, `MAX_CONCURRENT_CHUNK_BUILDERS=3`으로 모두 올리면 총 3개가 아니라 최대 9개 파서가 열리므로 그렇게 설정하지 마십시오. worker마다 파서 모델 메모리가 중복됩니다.
 
 선택형 Qwen3 TEI CPU 서비스는 현재 설정에서 유휴 메모리 약 1.5 GiB를 추가로 사용합니다. Docker VM 메모리가 부족하면 `TASK_EXECUTOR_WORKERS=1`로 낮추거나 임베딩 서비스를 별도 서버에서 운영하십시오. Compose는 시스템 RAM 상한을 강제로 설정하지 않습니다.
 
 ```dotenv
-TASK_EXECUTOR_WORKERS=1
+TASK_EXECUTOR_WORKERS=3
+MAX_CONCURRENT_TASKS=1
+MAX_CONCURRENT_CHUNK_BUILDERS=1
+PDF_TASK_PAGE_SIZE=12
 ```
 
 문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로의 공급자 요청 제한시간은 300초이고 embedding batch는 4입니다. 요청 단위 조정이며 자원 상한은 아닙니다. 설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`가 값을 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
 
-내부 PaddleOCR의 문서 크기와 페이지 수는 기본적으로 제한하지 않습니다. RAGFlow는 PDF를 최대 12쪽 작업으로 나누고, 그보다 메모리가 부족하면 현재 가용 메모리·worker 수·파서 동시성에 맞춰 작업 페이지 수를 1쪽까지 자동 축소합니다. OCR 서비스도 페이지를 한 장씩 렌더링하고 메모리가 부족하면 회수될 때까지 대기합니다. 큰 페이지는 현재 메모리 예산에 맞게 축소하고, OCR 큐가 차면 거부하지 않고 순서를 기다립니다. `MAX_CONTENT_LENGTH`, `LIG_DOCUMENT_MAX_BYTES`, `PADDLEOCR_MAX_UPLOAD_BYTES`, `PADDLEOCR_MAX_PDF_PAGES`의 `0`은 무제한입니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 정리하지 않습니다. 내부 Bearer 토큰과 문서 암호화 키는 최초 실행 때 생성해 `%LOCALAPPDATA%\LIG-RAGFlow\.env.secret`에도 보존하므로 새 번들 폴더로 교체해도 기존 DB의 저장 암호를 계속 해제할 수 있습니다.
+내부 PaddleOCR의 문서 크기와 페이지 수는 기본적으로 제한하지 않습니다. RAGFlow는 DeepDOC, Plain Text, Docling을 비롯해 페이지 분할이 가능한 모든 PDF 파서를 기본 `PDF_TASK_PAGE_SIZE=12`에 따라 12쪽 작업으로 나눕니다. 데이터셋의 `task_page_size`가 있으면 전역값보다 우선하며, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE`가 전송 상한으로 추가 적용됩니다. `One`, 지식 그래프 및 목차 추출처럼 전체 문서 문맥이 필요한 모드는 페이지를 분할하지 않습니다. 메모리가 부족하면 현재 가용 메모리와 `worker 수 × min(worker당 task 슬롯, worker당 parser 슬롯)`에 맞춰 작업 페이지 수를 1쪽까지 자동 축소합니다. OCR 서비스도 페이지를 한 장씩 렌더링하고 메모리가 부족하면 회수될 때까지 대기합니다. 큰 페이지는 현재 메모리 예산에 맞게 축소하고, OCR 큐가 차면 거부하지 않고 순서를 기다립니다. `MAX_CONTENT_LENGTH`, `LIG_DOCUMENT_MAX_BYTES`, `PADDLEOCR_MAX_UPLOAD_BYTES`, `PADDLEOCR_MAX_PDF_PAGES`의 `0`은 무제한입니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 정리하지 않습니다. 내부 Bearer 토큰과 문서 암호화 키는 최초 실행 때 생성해 `%LOCALAPPDATA%\LIG-RAGFlow\.env.secret`에도 보존하므로 새 번들 폴더로 교체해도 기존 DB의 저장 암호를 계속 해제할 수 있습니다.
 
 1. `diagnostics`의 task executor heartbeat 수가 설정값과 일치하는지 확인합니다.
 2. UI의 문서 처리 상세에서 현재 단계와 실제 `process_duration`을 확인합니다.

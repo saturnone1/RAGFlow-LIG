@@ -162,13 +162,9 @@ if (-not (Test-Path -LiteralPath $mcpDataDirectory -PathType Container)) {
 
 $previousProfiles = $env:COMPOSE_PROFILES
 $previousDevice = $env:DEVICE
-$previousWorkers = $env:TASK_EXECUTOR_WORKERS
 try {
     $env:DEVICE = $Device
     $env:COMPOSE_PROFILES = "infinity,$Device"
-    if ($Device -eq "gpu") {
-        $env:TASK_EXECUTOR_WORKERS = "1"
-    }
     & (Join-Path $PSScriptRoot "lig-ragflow.ps1") start
     if ($LASTEXITCODE -ne 0) { throw "RAGFlow start failed" }
 }
@@ -180,5 +176,4 @@ finally {
         $env:COMPOSE_PROFILES = $previousProfiles
     }
     if ($null -eq $previousDevice) { Remove-Item Env:DEVICE -ErrorAction SilentlyContinue } else { $env:DEVICE = $previousDevice }
-    if ($null -eq $previousWorkers) { Remove-Item Env:TASK_EXECUTOR_WORKERS -ErrorAction SilentlyContinue } else { $env:TASK_EXECUTOR_WORKERS = $previousWorkers }
 }

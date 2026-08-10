@@ -8,7 +8,7 @@
 
 - Windows 10/11과 Docker Desktop(Compose v2 포함)
 - C 드라이브 여유 공간 최소 20 GiB
-- `42300`~`42317`의 `.env.lig` 지정 로컬 포트가 비어 있어야 함
+- `42300`~`42317`의 `.env.lig` 지정 로컬 포트가 비어 있어야 함. 선택형 PaddleOCR-VL은 `42318`도 사용
 - GPU 설치: NVIDIA GPU, 최신 드라이버, Docker의 NVIDIA Container Toolkit/GPU 접근, Docker 메모리 20 GiB 이상 권장
 
 ## 설치와 운영
@@ -52,15 +52,17 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 .\logs.ps1
 ```
 
-GPU로 설치한 장비는 재부팅 후 반드시 `start-gpu.ps1`을 사용합니다. `install-gpu.ps1`은 RAGFlow와 PaddleOCR 이미지를 실제 `--gpus all` 컨테이너로 실행해 DeepDOC와 PaddleOCR의 CUDA 접근, GPU 이름·VRAM을 확인한 후 서비스를 시작합니다. 12 GiB VRAM 장비에서는 모델 중복 적재를 피하기 위해 task executor 1개를 기본으로 사용합니다.
+GPU로 설치한 장비는 재부팅 후 반드시 `start-gpu.ps1`을 사용합니다. `install-gpu.ps1`은 RAGFlow와 PaddleOCR 이미지를 실제 `--gpus all` 컨테이너로 실행해 DeepDOC와 PaddleOCR의 CUDA 접근, GPU 이름·VRAM을 확인한 후 서비스를 시작합니다. GPU 스크립트도 `.env.lig`의 공통 기본값인 worker 3개와 worker당 task/parser 슬롯 1개를 그대로 사용하며 별도 강제값은 없습니다. VRAM이 부족할 때만 운영자가 worker 수를 낮춥니다.
 
 `diagnostics.ps1`은 비밀값 없이 서비스 health, task executor heartbeat, 컨테이너 자원 스냅숏, 최근 단계별 처리시간과 오류를 JSON으로 출력합니다.
 
 ## 한국어 PDF
 
 - 텍스트 선택·복사가 정상: 데이터셋 언어 `Korean`, PDF 파서 `Plain Text`
-- 스캔 또는 글꼴 매핑이 깨짐: 데이터셋 언어 `Korean`, 청킹 `Naive`, PDF 파서 `paddleocr-from-env`. 내부 URL, 토큰과 `PP-OCRv5`는 자동 적용되며, 대형 PDF는 기본 12쪽 범위만 잘라 OCR 서비스에 전송합니다.
+- 스캔 또는 글꼴 매핑이 깨짐: 데이터셋 언어 `Korean`, 청킹 `Naive`, PDF 파서 `paddleocr-from-env`. 내부 URL, 토큰과 `PP-OCRv5`는 자동 적용되며, 대형 PDF는 기본 `PDF_TASK_PAGE_SIZE=12` 범위만 잘라 OCR 서비스에 전송합니다. 데이터셋 `task_page_size`로 덮어쓸 수 있고 PaddleOCR 전용 상한도 별도로 적용됩니다.
 - 영어·중국어 또는 복잡한 표·레이아웃: 기존 `DeepDOC` 유지
+
+`-IncludeGpu -IncludePaddleOcrVl`로 만든 선택 번들에서는 `install-paddleocr-vl.ps1`을 추가 실행할 수 있습니다. 설치 후 복잡한 표·수식·차트·다국어 문서에는 기존 PaddleOCR 선택 방식 그대로 `paddleocr-vl-from-env` 모델을 지정합니다. 일반 OCR은 `paddleocr-from-env`를 유지합니다.
 
 PaddleOCR 상태는 `http://127.0.0.1:42316/health`에서 확인합니다. CPU 설치는 ONNX Runtime CPU, GPU 설치는 CUDA를 사용하며 모델은 이미지에 선탑재되어 있습니다.
 
@@ -88,9 +90,10 @@ RAGFlow 컨테이너 안에서 접근 가능한 주소여야 하며, 모델명�
 - `lig/paddleocr-ko-gpu:v0.26.4-3` 한국어 PP-OCRv5 CUDA 이미지(`-IncludeGpu` 번들만)
 - `lig/qwen3-embedding-tei:0.6b-1` Qwen3 0.6B 모델 내장 TEI CPU 이미지(`-IncludeEmbedding` 번들만)
 - `lig/qwen3-embedding-adapter:0.6b-1` RAGFlow 질의 instruction 어댑터(`-IncludeEmbedding` 번들만)
+- 공식 PaddleOCR-VL-1.6 pipeline/vLLM 오프라인 이미지와 `lig/paddleocr-vl-gateway:1.6-1`(`-IncludePaddleOcrVl` 번들만)
 - `infiniflow/ragflow:v0.26.4` 롤백 이미지
 - Infinity, MySQL, MinIO, Valkey 이미지
 - 고정 버전 Compose 런타임 파일
-- 기본 런타임과 선택형 임베딩을 분리한 gzip Docker 이미지 아카이브 및 SHA-256 manifest
+- 기본 런타임, 선택형 임베딩 및 선택형 PaddleOCR-VL을 분리한 gzip Docker 이미지 아카이브와 SHA-256 manifest
 
 Qwen3 임베딩 이미지와 모델은 내보낼 때 `-IncludeEmbedding`으로 만든 번들에만 포함되며 기본 설치에서는 로드하거나 실행하지 않습니다. 아카이브가 포함되어 있고 사내 embedding endpoint가 없을 때 `install-embedding-cpu.ps1`로 선택 설치합니다. 생성 LLM은 별도로 준비해야 합니다.

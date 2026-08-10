@@ -44,7 +44,12 @@ def adaptive_pdf_task_page_size(configured_max: int) -> int:
     """Choose a non-rejecting PDF task size from current memory and parser concurrency."""
     configured_max = max(1, int(configured_max))
     workers = max(1, int(os.environ.get("TASK_EXECUTOR_WORKERS", "1")))
-    parser_concurrency = max(1, int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "1")))
+    task_concurrency = max(1, int(os.environ.get("MAX_CONCURRENT_TASKS", "1")))
+    chunk_concurrency = max(1, int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "1")))
+    # A worker cannot run more parsers than either its task slots or its chunk
+    # slots. Using the chunk limit alone overestimates memory pressure whenever
+    # MAX_CONCURRENT_TASKS is lower and needlessly shrinks PDF page ranges.
+    parser_concurrency = min(task_concurrency, chunk_concurrency)
     estimated_page_bytes = max(
         1,
         int(os.environ.get("LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", str(96 * 1024 * 1024))),

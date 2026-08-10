@@ -18,6 +18,8 @@ services:
       PADDLEOCR_BASE_URL: http://paddleocr:8080
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
+      PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
     volumes:
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
     logging: *lig-logging
@@ -35,7 +37,7 @@ services:
       - --mcp-script-path=/ragflow/mcp/server/server.py
       - --mcp-mode=self-host
       - --disable-taskexecutor
-      - --workers=${TASK_EXECUTOR_WORKERS:-1}
+      - --workers=${TASK_EXECUTOR_WORKERS:-3}
     depends_on:
       paddleocr-cpu:
         condition: service_healthy
@@ -59,6 +61,8 @@ services:
       PADDLEOCR_BASE_URL: http://paddleocr:8080
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
+      PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
     volumes:
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
     logging: *lig-logging
@@ -79,7 +83,7 @@ services:
       - --mcp-script-path=/ragflow/mcp/server/server.py
       - --mcp-mode=self-host
       - --disable-taskexecutor
-      - --workers=${TASK_EXECUTOR_WORKERS:-1}
+      - --workers=${TASK_EXECUTOR_WORKERS:-3}
     depends_on:
       paddleocr-gpu:
         condition: service_healthy
@@ -104,6 +108,8 @@ services:
       PADDLEOCR_BASE_URL: http://paddleocr:8080
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
+      PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
       MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}
       MAX_CONCURRENT_CHUNK_BUILDERS: ${MAX_CONCURRENT_CHUNK_BUILDERS:-1}
       TASK_LEASE_SECONDS: ${TASK_LEASE_SECONDS:-180}
@@ -118,7 +124,7 @@ services:
     command:
       - --disable-webserver
       - --disable-datasync
-      - --workers=${TASK_EXECUTOR_WORKERS:-1}
+      - --workers=${TASK_EXECUTOR_WORKERS:-3}
       - --host-id=lig-cpu-worker
     depends_on:
       mysql:
@@ -154,7 +160,9 @@ services:
       PADDLEOCR_BASE_URL: http://paddleocr:8080
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
+      PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
       MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}
       MAX_CONCURRENT_CHUNK_BUILDERS: ${MAX_CONCURRENT_CHUNK_BUILDERS:-1}
       TASK_LEASE_SECONDS: ${TASK_LEASE_SECONDS:-180}
@@ -169,7 +177,7 @@ services:
     command:
       - --disable-webserver
       - --disable-datasync
-      - --workers=${TASK_EXECUTOR_WORKERS:-1}
+      - --workers=${TASK_EXECUTOR_WORKERS:-3}
       - --host-id=lig-gpu-worker
     depends_on:
       mysql:
@@ -256,6 +264,74 @@ services:
     gpus: all
     logging: *lig-logging
 
+  paddleocr-vl-vlm:
+    profiles:
+      - paddleocr-vl
+    image: ${PADDLEOCR_VL_VLM_IMAGE:?Set PADDLEOCR_VL_VLM_IMAGE in LIG-Deployment/.env.lig}
+    networks:
+      ragflow:
+        aliases:
+          - paddleocr-vlm-server
+    restart: unless-stopped
+    user: root
+    gpus: all
+    shm_size: 64gb
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 300s
+      retries: 20
+    logging: *lig-logging
+
+  paddleocr-vl-api:
+    profiles:
+      - paddleocr-vl
+    image: ${PADDLEOCR_VL_API_IMAGE:?Set PADDLEOCR_VL_API_IMAGE in LIG-Deployment/.env.lig}
+    depends_on:
+      paddleocr-vl-vlm:
+        condition: service_healthy
+    environment:
+      VLM_BACKEND: vllm
+    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_vllm.yaml"
+    networks:
+      - ragflow
+    restart: unless-stopped
+    user: root
+    gpus: all
+    shm_size: 64gb
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 300s
+      retries: 20
+    logging: *lig-logging
+
+  paddleocr-vl:
+    profiles:
+      - paddleocr-vl
+    image: ${PADDLEOCR_VL_GATEWAY_IMAGE:?Set PADDLEOCR_VL_GATEWAY_IMAGE in LIG-Deployment/.env.lig}
+    depends_on:
+      paddleocr-vl-api:
+        condition: service_healthy
+    environment:
+      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
+      PADDLEOCR_VL_UPSTREAM_URL: http://paddleocr-vl-api:8080
+      PADDLEOCR_VL_INTERNAL_BASE_URL: http://paddleocr-vl:8080
+      PADDLEOCR_VL_JOB_WORKERS: ${PADDLEOCR_VL_JOB_WORKERS:-1}
+      PADDLEOCR_VL_MAX_UPLOAD_BYTES: ${PADDLEOCR_VL_MAX_UPLOAD_BYTES:-0}
+      PADDLEOCR_VL_MAX_PENDING_JOBS: ${PADDLEOCR_VL_MAX_PENDING_JOBS:-8}
+      PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS: ${PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS:-3600}
+    ports:
+      - ${PADDLEOCR_VL_PORT:?Set PADDLEOCR_VL_PORT in LIG-Deployment/.env.lig}:8080
+    networks:
+      ragflow:
+        aliases:
+          - paddleocr-vl
+    restart: unless-stopped
+    logging: *lig-logging
+
   ragflow-mcp-lig:
     image: ${RAGFLOW_MCP_LIG_IMAGE:?Set RAGFLOW_MCP_LIG_IMAGE in LIG-Deployment/.env.lig}
     depends_on:
@@ -282,8 +358,8 @@ services:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    # The upstream Compose applies MEM_LIMIT to Infinity. Resource sizing belongs
-    # to the host/Docker runtime in the LIG deployment, so remove that hard cap.
+    # upstream Compose의 Infinity MEM_LIMIT 상한을 적용하지 않습니다.
+    # 자원 크기는 호스트와 Docker 실행 환경에서 관리합니다.
     mem_limit: !reset null
     logging: *lig-logging
 
@@ -303,11 +379,10 @@ services:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    # RAGFlow uses Redis as the durable task queue, not as a cache. The upstream
-    # allkeys-lru policy lets Redis drop queued document tasks under memory
-    # pressure, and a dropped task has no requeue path: the document simply
-    # stops making progress. noeviction surfaces the pressure as a write error
-    # instead, and a large document queues one message per page range.
+    # Redis는 캐시가 아니라 문서 작업 큐로 사용됩니다. allkeys-lru를 쓰면
+    # 메모리 부족 시 대기 작업이 삭제되고 문서 진행이 멈출 수 있으므로,
+    # noeviction으로 저장 실패를 명확히 드러냅니다. 큰 문서는 페이지 범위마다
+    # 메시지 하나를 큐에 넣습니다.
     command:
       - redis-server
       - --requirepass
@@ -331,25 +406,22 @@ services:
       - "80"
       - --tokenization-workers
       - "2"
-      # Raising this past 8 slows every concurrency level down by about half:
-      # 16 requests of 4 texts at 4-way concurrency took 11.36s at 8 and 96.95s
-      # at 16 on the same host. Leave it alone.
+      # 8보다 키우면 모든 동시성 구간에서 약 절반으로 느려졌습니다.
+      # 같은 호스트에서 텍스트 4개 요청 16회를 4개씩 병렬 실행했을 때
+      # 8은 11.36초, 16은 96.95초였으므로 이 값은 유지하십시오.
       - --max-concurrent-requests
       - "8"
-      # MAX_CONCURRENT_EMBEDDERS in .env.lig must match this: TEI waits to fill
-      # a batch of this many requests before dispatching, so a client sending
-      # fewer at a time pays the wait on every request.
+      # .env.lig의 MAX_CONCURRENT_EMBEDDERS와 맞추십시오. TEI는 이 개수만큼
+      # 요청이 모이기를 기다렸다가 처리하므로, 더 적게 보내면 매번 대기합니다.
       - --max-batch-requests
       - "4"
-      # Raising this buys nothing and costs a large start-up allocation. Measured
-      # on a 12-CPU 28 GiB VM, 16 requests of 4 texts, warm-up peak / wall time
-      # with 4 concurrent requests:
+      # 이 값을 키워도 처리량은 늘지 않고 시작 메모리만 커집니다. 12 CPU,
+      # 28 GiB VM에서 텍스트 4개 요청 16회를 4개씩 병렬 실행한 측정값입니다.
       #   2048 ->  3.3 GB / 11.22s     4096 -> 5.8 GB / 11.37s
       #   8192 -> 15.3 GB / 12.59s     32768 -> over 20 GB, engine unresponsive
-      # Throughput is flat across all of them because the speed-up comes from
-      # concurrent requests, not from grouping them into one forward pass, and
-      # the largest budget is the slowest. Steady-state memory is ~2.35 GB
-      # regardless; only the start-up spike moves.
+      # 속도 향상은 큰 단일 forward batch가 아니라 동시 요청에서 나오므로
+      # 처리량은 비슷하고 가장 큰 값이 오히려 느립니다. 정상 상태 메모리는
+      # 약 2.35 GB로 같고 시작 순간의 최대 사용량만 달라집니다.
       - --max-batch-tokens
       - "2048"
       - --auto-truncate

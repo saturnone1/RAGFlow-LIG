@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("config", "pull", "build", "gpu-build", "ui-build", "mcp-build", "ocr-build", "embedding-build", "embedding-start", "embedding-stop", "embedding-status", "embedding-test", "start", "stop", "status", "diagnostics", "logs")]
+    [ValidateSet("config", "pull", "build", "gpu-build", "ui-build", "mcp-build", "ocr-build", "paddleocr-vl-build", "paddleocr-vl-pull", "paddleocr-vl-start", "paddleocr-vl-stop", "paddleocr-vl-status", "paddleocr-vl-test", "embedding-build", "embedding-start", "embedding-stop", "embedding-status", "embedding-test", "start", "stop", "status", "diagnostics", "logs")]
     [string]$Action = "status"
 )
 
@@ -20,6 +20,8 @@ $mcpDirectory = Join-Path $workspaceDirectory "RAGFlow-MCP-LIG"
 $mcpDockerfile = Join-Path $mcpDirectory "Dockerfile"
 $ocrDirectory = Join-Path $workspaceDirectory "LIG-PaddleOCR"
 $ocrDockerfile = Join-Path $ocrDirectory "Dockerfile"
+$ocrVlDirectory = Join-Path $workspaceDirectory "LIG-PaddleOCR-VL"
+$ocrVlDockerfile = Join-Path $ocrVlDirectory "Dockerfile"
 $embeddingDirectory = Join-Path $workspaceDirectory "LIG-Embedding"
 $embeddingModelDockerfile = Join-Path $embeddingDirectory "Dockerfile.model"
 $embeddingAdapterDockerfile = Join-Path $embeddingDirectory "Dockerfile.adapter"
@@ -244,12 +246,12 @@ function Ensure-LigSecrets {
 function Assert-LigConfiguration {
     Ensure-LigSecrets
     $configuration = Get-EnvFileValues $ligEnvFile
-    $workerValue = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "1"
+    $workerValue = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "3"
     $workers = 0
     if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1) {
         throw "TASK_EXECUTOR_WORKERS must be a positive integer. Current value: $workerValue"
     }
-    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS", "MAX_CONCURRENT_TASKS", "MAX_CONCURRENT_CHUNK_BUILDERS", "TASK_LEASE_SECONDS", "TASK_CANCEL_GRACE_SECONDS", "TASK_CANCEL_POLL_SECONDS", "TASK_PENDING_CLAIM_IDLE_SECONDS", "LIG_INGESTION_MEMORY_RESERVE_BYTES", "LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", "PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL")) {
+    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_VL_JOB_WORKERS", "PDF_TASK_PAGE_SIZE", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_VL_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS", "MAX_CONCURRENT_TASKS", "MAX_CONCURRENT_CHUNK_BUILDERS", "TASK_LEASE_SECONDS", "TASK_CANCEL_GRACE_SECONDS", "TASK_CANCEL_POLL_SECONDS", "TASK_PENDING_CLAIM_IDLE_SECONDS", "LIG_INGESTION_MEMORY_RESERVE_BYTES", "LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", "PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL", "PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS")) {
         $settingValue = Get-ConfigurationValue $configuration $settingName
         if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
         [long]$parsed = 0
@@ -460,7 +462,7 @@ function Invoke-Diagnostics {
             ApiProxyScheme = Get-ConfigurationValue $configuration "API_PROXY_SCHEME" "python"
             DocumentEngine = Get-ConfigurationValue $configuration "DOC_ENGINE"
             Profiles = Get-ConfigurationValue $configuration "COMPOSE_PROFILES"
-            TaskExecutorWorkers = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "1"
+            TaskExecutorWorkers = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "3"
             DocumentBulkSize = Get-ConfigurationValue $configuration "DOC_BULK_SIZE"
             EmbeddingBatchSize = Get-ConfigurationValue $configuration "EMBEDDING_BATCH_SIZE"
             ThreadPoolWorkers = Get-ConfigurationValue $configuration "THREAD_POOL_MAX_WORKERS"
@@ -525,6 +527,25 @@ switch ($Action) {
         Invoke-Docker @("build", "--file", $embeddingModelDockerfile, "--tag", "lig/qwen3-embedding-tei:0.6b-1", $embeddingDirectory)
         Invoke-Docker @("build", "--file", $embeddingAdapterDockerfile, "--tag", "lig/qwen3-embedding-adapter:0.6b-1", $embeddingDirectory)
         Write-Host "Built Qwen3 Embedding 0.6B TEI CPU and query adapter images."
+    }
+    "paddleocr-vl-build" {
+        Assert-FreeSpace
+        $configuration = Get-EnvFileValues $ligEnvFile
+        $gatewayImage = Get-ConfigurationValue $configuration "PADDLEOCR_VL_GATEWAY_IMAGE" "lig/paddleocr-vl-gateway:1.6-1"
+        Invoke-Docker @("build", "--file", $ocrVlDockerfile, "--tag", $gatewayImage, $ocrVlDirectory)
+        Write-Host "PaddleOCR-VL-1.6 RAGFlow 호환 게이트웨이 이미지를 빌드했습니다."
+    }
+    "paddleocr-vl-pull" {
+        Assert-FreeSpace
+        $configuration = Get-EnvFileValues $ligEnvFile
+        foreach ($image in @(
+            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_API_IMAGE"),
+            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_VLM_IMAGE")
+        )) {
+            if ([string]::IsNullOrWhiteSpace($image)) { throw "PaddleOCR-VL 공식 이미지 설정이 없습니다." }
+            Invoke-Docker @("pull", $image)
+        }
+        Write-Host "PaddleOCR-VL-1.6 공식 오프라인 GPU 이미지를 받았습니다."
     }
     "build" {
         Assert-FreeSpace
@@ -603,6 +624,40 @@ switch ($Action) {
         }
         Invoke-Compose @("--profile", "embedding-cpu", "up", "-d", "qwen3-embedding-tei", "qwen3-embedding")
         Invoke-Compose @("--profile", "embedding-cpu", "ps", "qwen3-embedding-tei", "qwen3-embedding")
+    }
+    "paddleocr-vl-start" {
+        Assert-FreeSpace
+        $configuration = Get-EnvFileValues $ligEnvFile
+        $images = @(
+            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_API_IMAGE"),
+            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_VLM_IMAGE"),
+            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_GATEWAY_IMAGE" "lig/paddleocr-vl-gateway:1.6-1")
+        )
+        foreach ($image in $images) {
+            $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+            if ($inspect.ExitCode -ne 0) {
+                throw "PaddleOCR-VL 이미지가 없습니다: $image. paddleocr-vl-pull 또는 paddleocr-vl-build를 먼저 실행하십시오."
+            }
+        }
+        Invoke-Compose @("--profile", "paddleocr-vl", "up", "-d", "paddleocr-vl-vlm", "paddleocr-vl-api", "paddleocr-vl")
+        Invoke-Compose @("--profile", "paddleocr-vl", "ps", "paddleocr-vl-vlm", "paddleocr-vl-api", "paddleocr-vl")
+    }
+    "paddleocr-vl-stop" {
+        Invoke-Compose @("--profile", "paddleocr-vl", "stop", "paddleocr-vl", "paddleocr-vl-api", "paddleocr-vl-vlm")
+    }
+    "paddleocr-vl-status" {
+        Invoke-Compose @("--profile", "paddleocr-vl", "ps", "paddleocr-vl-vlm", "paddleocr-vl-api", "paddleocr-vl")
+    }
+    "paddleocr-vl-test" {
+        $configuration = Get-EnvFileValues $ligEnvFile
+        $binding = Get-ConfigurationValue $configuration "PADDLEOCR_VL_PORT" "127.0.0.1:42318"
+        $port = ($binding -split ':')[-1]
+        if ($port -notmatch '^\d+$') { throw "PADDLEOCR_VL_PORT는 숫자 포트로 끝나야 합니다. 현재 값: $binding" }
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 15
+        if ($health.status -ne "ok" -or $health.model -ne "PaddleOCR-VL-1.6") {
+            throw "PaddleOCR-VL 상태 응답이 올바르지 않습니다."
+        }
+        Write-Host "PaddleOCR-VL-1.6 pipeline과 RAGFlow 호환 게이트웨이가 정상입니다."
     }
     "embedding-stop" {
         Invoke-Compose @("--profile", "embedding-cpu", "stop", "qwen3-embedding", "qwen3-embedding-tei")
