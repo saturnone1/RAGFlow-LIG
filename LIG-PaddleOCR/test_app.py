@@ -108,16 +108,26 @@ class OcrJobLifecycleTests(unittest.TestCase):
         self.assertTrue(cancel_event.is_set())
 
     def test_pdf_render_scale_does_not_double_scale_or_reject_large_pages(self) -> None:
-        self.assertEqual(ocr_app._pdf_render_scale(1000, 1000), ocr_app.RENDER_SCALE)
+        self.assertEqual(
+            ocr_app._pdf_render_scale(1000, 1000, 144),
+            2.0,
+        )
+        self.assertEqual(
+            ocr_app._pdf_render_scale(1000, 1000, 216),
+            3.0,
+        )
         scale = ocr_app._pdf_render_scale(
             ocr_app.MAX_PAGE_PIXELS,
             2,
+            144,
             ocr_app.MIN_FREE_BYTES + ocr_app.OCR_BYTES_PER_PIXEL * ocr_app.MAX_PAGE_PIXELS,
         )
         self.assertLess(scale, 1.0)
         self.assertLessEqual(ocr_app.MAX_PAGE_PIXELS * 2 * scale * scale, ocr_app.MAX_PAGE_PIXELS + 1)
         with self.assertRaisesRegex(ValueError, "dimensions must be positive"):
-            ocr_app._pdf_render_scale(0, 1000)
+            ocr_app._pdf_render_scale(0, 1000, 144)
+        with self.assertRaisesRegex(ValueError, "DPI must be a positive integer"):
+            ocr_app._pdf_render_scale(1000, 1000, 0)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=lig/ragflow-ui:v0.26.4-3
+ARG BASE_IMAGE=lig/ragflow-ui:v0.26.4-4
 FROM ${BASE_IMAGE}
 
 USER root
@@ -14,7 +14,7 @@ COPY app.py /opt/lig-paddleocr/app.py
 ENV PADDLEOCR_DEVICE=cpu \
     PADDLEOCR_INTERNAL_BASE_URL=http://paddleocr:8080 \
     PADDLEOCR_JOB_DIRECTORY=/tmp/lig-paddleocr-jobs \
-    PADDLEOCR_RENDER_SCALE=2.0 \
+    PADDLEOCR_RENDER_DPI=144 \
     PADDLEOCR_JOB_WORKERS=1 \
     PADDLEOCR_JOB_TTL_SECONDS=3600 \
     PADDLEOCR_MAX_UPLOAD_BYTES=0 \
@@ -27,6 +27,6 @@ ENV PADDLEOCR_DEVICE=cpu \
 
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=10 \
-  CMD curl --fail --silent http://127.0.0.1:8080/health || exit 1
+  CMD ["curl", "--fail", "--silent", "http://127.0.0.1:8080/health"]
 
 ENTRYPOINT ["/ragflow/.venv/bin/python", "/opt/lig-paddleocr/app.py"]

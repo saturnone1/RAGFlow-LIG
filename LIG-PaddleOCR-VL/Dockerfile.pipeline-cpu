@@ -1,0 +1,18 @@
+ARG BASE_IMAGE=ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:latest-nvidia-gpu-offline
+FROM ${BASE_IMAGE}
+
+USER root
+
+# 공식 오프라인 이미지의 모델과 PaddleOCR/PaddleX 버전은 그대로 유지하고,
+# CUDA에 링크된 PaddlePaddle만 동일 버전 CPU 런타임으로 교체합니다.
+RUN python -m pip uninstall -y paddlepaddle-gpu \
+    && python -m pip install --no-cache-dir paddlepaddle==3.2.1 \
+    && python - <<'PY'
+import paddle
+
+assert not paddle.device.is_compiled_with_cuda(), "PaddleOCR-VL pipeline must not contain a CUDA Paddle runtime"
+print("PaddleOCR-VL pipeline runtime:", paddle.__version__, "CPU")
+PY
+
+COPY run_pipeline.py /opt/lig-paddleocr-vl/run_pipeline.py
+ENTRYPOINT ["python", "/opt/lig-paddleocr-vl/run_pipeline.py"]

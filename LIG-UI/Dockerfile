@@ -67,8 +67,14 @@ RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/common/doc_store/infinity_conn_base.py \
         /ragflow/api/db/services/document_service.py \
         /ragflow/rag/svr/task_executor_limiter.py \
+        /ragflow/common/settings.py \
+        /ragflow/deepdoc/vision/ocr.py \
+        /ragflow/api/db/db_models.py \
+        /ragflow/api/apps/services/dataset_api_service.py \
     && rm /tmp/apply-lig-runtime-patches.py
 RUN sed -i 's/client_max_body_size 1024M;/client_max_body_size 0;/' /etc/nginx/nginx.conf \
     && grep -q 'client_max_body_size 0;' /etc/nginx/nginx.conf
 RUN rm -rf /ragflow/web/dist && mkdir -p /ragflow/web/dist
 COPY --from=web-builder /build/web/dist/ /ragflow/web/dist/
+WORKDIR /ragflow
+ENTRYPOINT ["/ragflow/.venv/bin/python", "-m", "lig_runtime.container_entrypoint"]

@@ -7,11 +7,13 @@ x-lig-logging: &lig-logging
 services:
   ragflow-cpu:
     image: ${RAGFLOW_IMAGE:?Set RAGFLOW_IMAGE in LIG-Deployment/.env.lig}
+    entrypoint: ["/ragflow/.venv/bin/python", "-m", "lig_runtime.container_entrypoint"]
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
       RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      RAGFLOW_MCP_LAUNCH_MODE: self-host
       LIG_DOCUMENT_PASSWORD_KEY: ${LIG_DOCUMENT_PASSWORD_KEY:?Set LIG_DOCUMENT_PASSWORD_KEY in LIG-Deployment/.env.secret}
       LIG_DOCUMENT_PASSWORD_KEY_ID: ${LIG_DOCUMENT_PASSWORD_KEY_ID:-primary}
       LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS: ${LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS:-}
@@ -19,9 +21,11 @@ services:
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
       PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      PADDLEOCR_VL_ACCESS_TOKEN: ${PADDLEOCR_VL_INTERNAL_TOKEN:?Set PADDLEOCR_VL_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
-    volumes:
+    volumes: !override
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
+      - ./service_conf.yaml.template:/ragflow/conf/service_conf.yaml.template:ro
     logging: *lig-logging
     networks:
       ragflow:
@@ -50,11 +54,13 @@ services:
 
   ragflow-gpu:
     image: ${RAGFLOW_GPU_IMAGE:?Set RAGFLOW_GPU_IMAGE in LIG-Deployment/.env.lig}
+    entrypoint: ["/ragflow/.venv/bin/python", "-m", "lig_runtime.container_entrypoint"]
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
       RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
+      RAGFLOW_MCP_LAUNCH_MODE: self-host
       LIG_DOCUMENT_PASSWORD_KEY: ${LIG_DOCUMENT_PASSWORD_KEY:?Set LIG_DOCUMENT_PASSWORD_KEY in LIG-Deployment/.env.secret}
       LIG_DOCUMENT_PASSWORD_KEY_ID: ${LIG_DOCUMENT_PASSWORD_KEY_ID:-primary}
       LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS: ${LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS:-}
@@ -62,9 +68,11 @@ services:
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
       PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      PADDLEOCR_VL_ACCESS_TOKEN: ${PADDLEOCR_VL_INTERNAL_TOKEN:?Set PADDLEOCR_VL_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
-    volumes:
+    volumes: !override
       - ${LIG_LOG_DIRECTORY:?Set LIG_LOG_DIRECTORY}:/ragflow/logs
+      - ./service_conf.yaml.template:/ragflow/conf/service_conf.yaml.template:ro
     logging: *lig-logging
     networks:
       ragflow:
@@ -85,7 +93,7 @@ services:
       - --disable-taskexecutor
       - --workers=${TASK_EXECUTOR_WORKERS:-3}
     depends_on:
-      paddleocr-gpu:
+      paddleocr-cpu:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "/ragflow/.venv/bin/python", "-m", "lig_runtime.service_health"]
@@ -98,6 +106,7 @@ services:
     profiles:
       - cpu
     image: ${RAGFLOW_IMAGE:?Set RAGFLOW_IMAGE in LIG-Deployment/.env.lig}
+    entrypoint: ["/ragflow/.venv/bin/python", "-m", "lig_runtime.container_entrypoint"]
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
@@ -109,6 +118,7 @@ services:
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
       PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      PADDLEOCR_VL_ACCESS_TOKEN: ${PADDLEOCR_VL_INTERNAL_TOKEN:?Set PADDLEOCR_VL_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
       MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}
       MAX_CONCURRENT_CHUNK_BUILDERS: ${MAX_CONCURRENT_CHUNK_BUILDERS:-1}
@@ -139,7 +149,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'rag/svr/task_executor.py' >/dev/null"]
+      test: ["CMD", "/ragflow/.venv/bin/python", "-m", "lig_runtime.worker_health"]
       interval: 15s
       timeout: 5s
       start_period: 90s
@@ -150,6 +160,7 @@ services:
     profiles:
       - gpu
     image: ${RAGFLOW_GPU_IMAGE:?Set RAGFLOW_GPU_IMAGE in LIG-Deployment/.env.lig}
+    entrypoint: ["/ragflow/.venv/bin/python", "-m", "lig_runtime.container_entrypoint"]
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
@@ -161,6 +172,7 @@ services:
       PADDLEOCR_ACCESS_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_ALGORITHM: PP-OCRv5
       PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      PADDLEOCR_VL_ACCESS_TOKEN: ${PADDLEOCR_VL_INTERNAL_TOKEN:?Set PADDLEOCR_VL_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       TASK_EXECUTOR_WORKERS: ${TASK_EXECUTOR_WORKERS:-3}
       MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}
@@ -188,12 +200,12 @@ services:
         condition: service_healthy
       infinity:
         condition: service_healthy
-      paddleocr-gpu:
+      paddleocr-cpu:
         condition: service_healthy
     restart: unless-stopped
     gpus: all
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'rag/svr/task_executor.py' >/dev/null"]
+      test: ["CMD", "/ragflow/.venv/bin/python", "-m", "lig_runtime.worker_health"]
       interval: 15s
       timeout: 5s
       start_period: 90s
@@ -203,6 +215,7 @@ services:
   paddleocr-cpu:
     profiles:
       - cpu
+      - gpu
     image: ${PADDLEOCR_IMAGE:?Set PADDLEOCR_IMAGE in LIG-Deployment/.env.lig}
     depends_on:
       mysql:
@@ -213,6 +226,9 @@ services:
     environment:
       PADDLEOCR_DEVICE: cpu
       PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
+      PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
+      PADDLEOCR_VL_ACCESS_TOKEN: ${PADDLEOCR_VL_INTERNAL_TOKEN:?Set PADDLEOCR_VL_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
+      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
       PADDLEOCR_INTERNAL_BASE_URL: http://paddleocr:8080
       PADDLEOCR_JOB_WORKERS: ${PADDLEOCR_JOB_WORKERS:-1}
       PADDLEOCR_MAX_UPLOAD_BYTES: ${PADDLEOCR_MAX_UPLOAD_BYTES:-0}
@@ -229,55 +245,28 @@ services:
         aliases:
           - paddleocr
     restart: unless-stopped
-    logging: *lig-logging
-
-  paddleocr-gpu:
-    profiles:
-      - gpu
-    image: ${PADDLEOCR_GPU_IMAGE:?Set PADDLEOCR_GPU_IMAGE in LIG-Deployment/.env.lig}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    env_file:
-      - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
-      - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
-    environment:
-      PADDLEOCR_DEVICE: gpu
-      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
-      PADDLEOCR_INTERNAL_BASE_URL: http://paddleocr:8080
-      PADDLEOCR_JOB_WORKERS: ${PADDLEOCR_JOB_WORKERS:-1}
-      PADDLEOCR_MAX_UPLOAD_BYTES: ${PADDLEOCR_MAX_UPLOAD_BYTES:-0}
-      PADDLEOCR_MAX_PDF_PAGES: ${PADDLEOCR_MAX_PDF_PAGES:-0}
-      PADDLEOCR_MAX_PENDING_JOBS: ${PADDLEOCR_MAX_PENDING_JOBS:-8}
-      PADDLEOCR_MIN_FREE_BYTES: ${PADDLEOCR_MIN_FREE_BYTES:-536870912}
-      PADDLEOCR_MAX_PAGE_PIXELS: ${PADDLEOCR_MAX_PAGE_PIXELS:-50000000}
-      PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL: ${PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL:-48}
-      PADDLEOCR_MEMORY_POLL_SECONDS: ${PADDLEOCR_MEMORY_POLL_SECONDS:-2}
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    ports:
-      - ${PADDLEOCR_PORT:?Set PADDLEOCR_PORT in LIG-Deployment/.env.lig}:8080
-    networks:
-      ragflow:
-        aliases:
-          - paddleocr
-    restart: unless-stopped
-    gpus: all
     logging: *lig-logging
 
   paddleocr-vl-vlm:
     profiles:
       - paddleocr-vl
-    image: ${PADDLEOCR_VL_VLM_IMAGE:?Set PADDLEOCR_VL_VLM_IMAGE in LIG-Deployment/.env.lig}
+    image: ${PADDLEOCR_VL_VLM_RUNTIME_IMAGE:?Set PADDLEOCR_VL_VLM_RUNTIME_IMAGE in LIG-Deployment/.env.lig}
     networks:
       ragflow:
         aliases:
           - paddleocr-vlm-server
     restart: unless-stopped
     user: root
+    environment:
+      PADDLEOCR_VL_GPU_MEMORY_UTILIZATION: ${PADDLEOCR_VL_GPU_MEMORY_UTILIZATION:-0.60}
+      PADDLEOCR_VL_MAX_MODEL_LEN: ${PADDLEOCR_VL_MAX_MODEL_LEN:-16384}
+      PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS: ${PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS:-16384}
+      PADDLEOCR_VL_MAX_NUM_SEQS: ${PADDLEOCR_VL_MAX_NUM_SEQS:-8}
+      PADDLEOCR_VL_API_SERVER_COUNT: ${PADDLEOCR_VL_API_SERVER_COUNT:-1}
     gpus: all
     shm_size: 64gb
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
       interval: 15s
       timeout: 5s
       start_period: 300s
@@ -293,15 +282,14 @@ services:
         condition: service_healthy
     environment:
       VLM_BACKEND: vllm
-    command: /bin/bash -c "paddlex --serve --pipeline /home/paddleocr/pipeline_config_vllm.yaml"
+      PADDLEOCR_VL_PIPELINE_DEVICE: ${PADDLEOCR_VL_PIPELINE_DEVICE:-cpu}
     networks:
       - ragflow
     restart: unless-stopped
     user: root
-    gpus: all
     shm_size: 64gb
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
       interval: 15s
       timeout: 5s
       start_period: 300s
@@ -316,7 +304,7 @@ services:
       paddleocr-vl-api:
         condition: service_healthy
     environment:
-      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
+      PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_VL_INTERNAL_TOKEN:?Set PADDLEOCR_VL_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_VL_UPSTREAM_URL: http://paddleocr-vl-api:8080
       PADDLEOCR_VL_INTERNAL_BASE_URL: http://paddleocr-vl:8080
       PADDLEOCR_VL_JOB_WORKERS: ${PADDLEOCR_VL_JOB_WORKERS:-1}
@@ -361,6 +349,11 @@ services:
     # upstream Compose의 Infinity MEM_LIMIT 상한을 적용하지 않습니다.
     # 자원 크기는 호스트와 Docker 실행 환경에서 관리합니다.
     mem_limit: !reset null
+    mem_reservation: !reset null
+    cpus: !reset null
+    deploy:
+      resources:
+        limits: !reset null
     logging: *lig-logging
 
   mysql:

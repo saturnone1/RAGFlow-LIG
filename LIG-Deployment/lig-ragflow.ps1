@@ -22,6 +22,8 @@ $ocrDirectory = Join-Path $workspaceDirectory "LIG-PaddleOCR"
 $ocrDockerfile = Join-Path $ocrDirectory "Dockerfile"
 $ocrVlDirectory = Join-Path $workspaceDirectory "LIG-PaddleOCR-VL"
 $ocrVlDockerfile = Join-Path $ocrVlDirectory "Dockerfile"
+$ocrVlPipelineCpuDockerfile = Join-Path $ocrVlDirectory "Dockerfile.pipeline-cpu"
+$ocrVlVlmDockerfile = Join-Path $ocrVlDirectory "Dockerfile.vlm"
 $embeddingDirectory = Join-Path $workspaceDirectory "LIG-Embedding"
 $embeddingModelDockerfile = Join-Path $embeddingDirectory "Dockerfile.model"
 $embeddingAdapterDockerfile = Join-Path $embeddingDirectory "Dockerfile.adapter"
@@ -178,6 +180,24 @@ function Ensure-LigSecrets {
         }
     }
     $lines = @(Get-Content -LiteralPath $secretFile)
+    $mcpKeyLineIndex = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match '^\s*RAGFLOW_MCP_API_KEY=') { $mcpKeyLineIndex = $index }
+    }
+    $mcpKey = if ($mcpKeyLineIndex -ge 0) { ($lines[$mcpKeyLineIndex] -split '=', 2)[1].Trim() } else { "" }
+    if ([string]::IsNullOrWhiteSpace($mcpKey) -or $mcpKey -eq "ragflow-replace-with-a-local-api-key") {
+        $existingMcpKey = Get-ExistingContainerEnvValue "RAGFLOW_MCP_HOST_API_KEY"
+        if ($existingMcpKey -and $existingMcpKey -ne "ragflow-replace-with-a-local-api-key") {
+            $mcpKey = $existingMcpKey
+            Write-Host "Recovered the existing server-side official MCP API key from the LIG runtime."
+        }
+        else {
+            $mcpKey = "ragflow-$((New-RandomSecret).TrimEnd('=').Replace('+', '-').Replace('/', '_'))"
+            Write-Host "Generated the server-side official MCP API key. MCP clients do not need this key."
+        }
+        $mcpKeyLine = "RAGFLOW_MCP_API_KEY=$mcpKey"
+        if ($mcpKeyLineIndex -ge 0) { $lines[$mcpKeyLineIndex] = $mcpKeyLine } else { $lines += $mcpKeyLine }
+    }
     $keyLineIndex = -1
     $legacyKeyLineIndex = -1
     for ($index = 0; $index -lt $lines.Count; $index++) {
@@ -234,7 +254,30 @@ function Ensure-LigSecrets {
     if ([string]::IsNullOrWhiteSpace($ocrToken) -or $ocrToken -eq "replace-with-a-random-internal-token") {
         $ocrTokenLine = "PADDLEOCR_INTERNAL_TOKEN=$(New-RandomSecret)"
         if ($ocrTokenLineIndex -ge 0) { $lines[$ocrTokenLineIndex] = $ocrTokenLine } else { $lines += $ocrTokenLine }
+        $ocrToken = ($ocrTokenLine -split '=', 2)[1]
         Write-Host "Generated the internal PaddleOCR bearer token in LIG-Deployment\.env.secret."
+    }
+    $ocrVlTokenLineIndex = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match '^\s*PADDLEOCR_VL_INTERNAL_TOKEN=') { $ocrVlTokenLineIndex = $index }
+    }
+    $ocrVlToken = if ($ocrVlTokenLineIndex -ge 0) { ($lines[$ocrVlTokenLineIndex] -split '=', 2)[1].Trim() } else { "" }
+    if (
+        [string]::IsNullOrWhiteSpace($ocrVlToken) -or
+        $ocrVlToken -eq "replace-with-a-separate-random-internal-token" -or
+        $ocrVlToken -eq $ocrToken
+    ) {
+        $existingOcrVlToken = Get-ExistingContainerEnvValue "PADDLEOCR_VL_ACCESS_TOKEN"
+        if ($existingOcrVlToken -and $existingOcrVlToken -ne $ocrToken) {
+            $ocrVlToken = $existingOcrVlToken
+            Write-Host "Recovered the existing internal PaddleOCR-VL token from the LIG runtime."
+        }
+        else {
+            $ocrVlToken = New-RandomSecret
+            Write-Host "Generated a separate internal PaddleOCR-VL bearer token."
+        }
+        $ocrVlTokenLine = "PADDLEOCR_VL_INTERNAL_TOKEN=$ocrVlToken"
+        if ($ocrVlTokenLineIndex -ge 0) { $lines[$ocrVlTokenLineIndex] = $ocrVlTokenLine } else { $lines += $ocrVlTokenLine }
     }
     [IO.File]::WriteAllLines($secretFile, $lines, [Text.UTF8Encoding]::new($false))
     if (-not (Test-Path -LiteralPath $persistentStateDirectory -PathType Container)) {
@@ -251,7 +294,7 @@ function Assert-LigConfiguration {
     if (-not [int]::TryParse($workerValue, [ref]$workers) -or $workers -lt 1) {
         throw "TASK_EXECUTOR_WORKERS must be a positive integer. Current value: $workerValue"
     }
-    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_VL_JOB_WORKERS", "PDF_TASK_PAGE_SIZE", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_VL_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS", "MAX_CONCURRENT_TASKS", "MAX_CONCURRENT_CHUNK_BUILDERS", "TASK_LEASE_SECONDS", "TASK_CANCEL_GRACE_SECONDS", "TASK_CANCEL_POLL_SECONDS", "TASK_PENDING_CLAIM_IDLE_SECONDS", "LIG_INGESTION_MEMORY_RESERVE_BYTES", "LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", "PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL", "PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS")) {
+    foreach ($settingName in @("DOC_BULK_SIZE", "EMBEDDING_BATCH_SIZE", "THREAD_POOL_MAX_WORKERS", "PADDLEOCR_JOB_WORKERS", "PADDLEOCR_VL_JOB_WORKERS", "PDF_TASK_PAGE_SIZE", "PADDLEOCR_TASK_PAGE_SIZE", "PADDLEOCR_MAX_PENDING_JOBS", "PADDLEOCR_VL_MAX_PENDING_JOBS", "PADDLEOCR_MIN_FREE_BYTES", "PADDLEOCR_MAX_PAGE_PIXELS", "PADDLEOCR_DIRECT_WORKERS", "PADDLEOCR_DIRECT_RENDER_DPI", "MAX_CONCURRENT_TASKS", "MAX_CONCURRENT_CHUNK_BUILDERS", "TASK_LEASE_SECONDS", "TASK_CANCEL_GRACE_SECONDS", "TASK_CANCEL_POLL_SECONDS", "TASK_PENDING_CLAIM_IDLE_SECONDS", "LIG_INGESTION_MEMORY_RESERVE_BYTES", "LIG_PDF_ESTIMATED_WORKING_BYTES_PER_PAGE", "PADDLEOCR_ESTIMATED_BYTES_PER_PIXEL", "PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS", "PADDLEOCR_VL_MAX_MODEL_LEN", "PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS", "PADDLEOCR_VL_MAX_NUM_SEQS", "PADDLEOCR_VL_API_SERVER_COUNT")) {
         $settingValue = Get-ConfigurationValue $configuration $settingName
         if ([string]::IsNullOrWhiteSpace($settingValue)) { continue }
         [long]$parsed = 0
@@ -272,6 +315,110 @@ function Assert-LigConfiguration {
     if (-not [int]::TryParse($memoryPercentValue, [ref]$memoryPercent) -or $memoryPercent -lt 1 -or $memoryPercent -gt 100) {
         throw "LIG_INGESTION_MEMORY_PERCENT must be an integer from 1 through 100. Current value: $memoryPercentValue"
     }
+    $gpuUtilizationValue = Get-ConfigurationValue $configuration "PADDLEOCR_VL_GPU_MEMORY_UTILIZATION" "0.60"
+    [double]$gpuUtilization = 0
+    if (-not [double]::TryParse($gpuUtilizationValue, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$gpuUtilization) -or $gpuUtilization -le 0 -or $gpuUtilization -ge 1) {
+        throw "PADDLEOCR_VL_GPU_MEMORY_UTILIZATION must be greater than 0 and less than 1. Current value: $gpuUtilizationValue"
+    }
+    [long]$maxModelLength = Get-ConfigurationValue $configuration "PADDLEOCR_VL_MAX_MODEL_LEN" "16384"
+    [long]$maxBatchedTokens = Get-ConfigurationValue $configuration "PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS" "16384"
+    if ($maxBatchedTokens -lt $maxModelLength) {
+        throw "PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS must be at least PADDLEOCR_VL_MAX_MODEL_LEN."
+    }
+    $pipelineDevice = Get-ConfigurationValue $configuration "PADDLEOCR_VL_PIPELINE_DEVICE" "cpu"
+    if ($pipelineDevice -ne "cpu") {
+        throw "PADDLEOCR_VL_PIPELINE_DEVICE는 VRAM 충돌 방지를 위해 cpu여야 합니다. 현재 값: $pipelineDevice"
+    }
+    $adaptivePageSizing = Get-ConfigurationValue $configuration "ADAPTIVE_PDF_TASK_PAGE_SIZE" "false"
+    if ($adaptivePageSizing -notmatch '^(?i:true|false|1|0|yes|no|on|off)$') {
+        throw "ADAPTIVE_PDF_TASK_PAGE_SIZE must be true or false. Current value: $adaptivePageSizing"
+    }
+}
+
+function Invoke-ComposeCapture([string[]]$Arguments, [switch]$AllowFailure) {
+    Ensure-LigSecrets
+    $result = Invoke-DockerCapture -Arguments ($composeArguments + $Arguments) -AllowFailure:$AllowFailure
+    return $result
+}
+
+function Test-ComposeGpuReservation($Service) {
+    if ($Service -and $Service.gpus) { return $true }
+    if (-not $Service -or -not $Service.deploy -or -not $Service.deploy.resources -or -not $Service.deploy.resources.reservations) {
+        return $false
+    }
+    foreach ($device in @($Service.deploy.resources.reservations.devices)) {
+        if (@($device.capabilities) -contains "gpu") { return $true }
+    }
+    return $false
+}
+
+function Assert-OcrDeviceTopology {
+    $rendered = Invoke-ComposeCapture -Arguments @(
+        "--profile", "infinity", "--profile", "cpu", "--profile", "gpu", "--profile", "paddleocr-vl",
+        "config", "--format", "json"
+    )
+    $compose = ($rendered.Lines -join "`n") | ConvertFrom-Json
+    $serviceNames = @($compose.services.PSObject.Properties.Name)
+    foreach ($required in @("paddleocr-cpu", "paddleocr-vl", "paddleocr-vl-api", "paddleocr-vl-vlm")) {
+        if ($required -notin $serviceNames) { throw "Compose에 필수 OCR 서비스가 없습니다: $required" }
+    }
+    if ($compose.services.'paddleocr-cpu'.environment.PADDLEOCR_DEVICE -ne "cpu") {
+        throw "CPU 프로필의 일반 PaddleOCR 장치가 cpu가 아닙니다."
+    }
+    if (Test-ComposeGpuReservation $compose.services.'paddleocr-cpu') {
+        throw "CPU 프로필의 일반 PaddleOCR가 GPU를 요청하고 있습니다."
+    }
+    if ($compose.services.'paddleocr-vl-api'.environment.PADDLEOCR_VL_PIPELINE_DEVICE -ne "cpu") {
+        throw "PaddleOCR-VL 레이아웃 파이프라인은 CPU로 고정되어야 합니다."
+    }
+    if (Test-ComposeGpuReservation $compose.services.'paddleocr-vl-api') {
+        throw "PaddleOCR-VL 레이아웃 파이프라인이 GPU를 요청하고 있습니다."
+    }
+    if (-not (Test-ComposeGpuReservation $compose.services.'paddleocr-vl-vlm')) {
+        throw "PaddleOCR-VL VLM에 GPU 예약이 없습니다."
+    }
+    $infinity = $compose.services.infinity
+    if ($infinity.mem_limit -or $infinity.mem_reservation -or $infinity.cpus -or $infinity.deploy.resources.limits) {
+        throw "Infinity에 CPU 또는 메모리 상한이 남아 있습니다. 데이터 손상 방지를 위해 상한 없이 실행해야 합니다."
+    }
+    foreach ($serviceName in @("ragflow-cpu", "ragflow-gpu", "ragflow-worker-cpu", "ragflow-worker-gpu")) {
+        $entrypoint = @($compose.services.$serviceName.entrypoint)
+        if (($entrypoint -join " ") -ne "/ragflow/.venv/bin/python -m lig_runtime.container_entrypoint") {
+            throw "$serviceName 서비스가 Bash 없는 LIG 실행기를 사용하지 않습니다."
+        }
+    }
+    Write-Host "OCR/Infinity 구성 검증 통과: PP-OCRv5=CPU, VL 레이아웃=CPU, VL VLM=GPU, Infinity=무상한"
+}
+
+function Get-ComposeServiceContainerId([string]$Service) {
+    $result = Invoke-DockerCapture -Arguments @(
+        "ps", "-a",
+        "--filter", "label=com.docker.compose.project=lig-ragflow",
+        "--filter", "label=com.docker.compose.service=$Service",
+        "--format", "{{.ID}}"
+    ) -AllowFailure
+    if ($result.ExitCode -ne 0) { return $null }
+    return $result.Lines | Where-Object { $_ -match '^[0-9a-fA-F]{12,64}$' } | Select-Object -First 1
+}
+
+function Show-PaddleOcrVlGpuSummary([string]$ContainerId) {
+    if (-not $ContainerId) {
+        Write-Warning "PaddleOCR-VL VLM 컨테이너가 없습니다."
+        return
+    }
+    $gpu = Invoke-DockerCapture -Arguments @(
+        "exec", $ContainerId, "nvidia-smi",
+        "--query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu",
+        "--format=csv,noheader,nounits"
+    ) -AllowFailure
+    if ($gpu.ExitCode -ne 0) {
+        Write-Warning "VLM 컨테이너에서 NVIDIA GPU 상태를 읽지 못했습니다."
+        return
+    }
+    Write-Host ""
+    Write-Host "PaddleOCR-VL GPU 상태 (MiB, %):"
+    Write-Host "GPU, 전체 VRAM, 사용 VRAM, 여유 VRAM, 사용률"
+    $gpu.Lines | ForEach-Object { Write-Host $_ }
 }
 
 function Protect-DiagnosticText([string]$Text) {
@@ -360,6 +507,16 @@ function Invoke-Diagnostics {
     }
     $officialMcpProbe = Test-McpInitialize $officialMcpUrl
     $managementMcpProbe = Test-McpInitialize $managementMcpUrl $(if ($hasUsableApiKey) { $apiKey } else { "" })
+    $ocrBinding = Get-ConfigurationValue $configuration "PADDLEOCR_PORT" "127.0.0.1:42316"
+    $ocrPort = ($ocrBinding -split ':')[-1]
+    $ocrUrl = "http://127.0.0.1:$ocrPort"
+    $ocrHealth = $null
+    try { $ocrHealth = Invoke-RestMethod -Uri "$ocrUrl/health" -TimeoutSec 10 } catch { $ocrHealth = [pscustomobject]@{ status = "unreachable"; error = $_.Exception.Message } }
+    $vlBinding = Get-ConfigurationValue $configuration "PADDLEOCR_VL_PORT" "127.0.0.1:42318"
+    $vlPort = ($vlBinding -split ':')[-1]
+    $vlUrl = "http://127.0.0.1:$vlPort"
+    $vlHealth = $null
+    try { $vlHealth = Invoke-RestMethod -Uri "$vlUrl/health" -TimeoutSec 10 } catch { $vlHealth = [pscustomobject]@{ status = "not-running" } }
 
     $composeResult = Invoke-DockerCapture -Arguments (@($composeArguments) + @("ps", "--format", "json")) -AllowFailure
     $composeRows = @($composeResult.Lines | ForEach-Object {
@@ -441,6 +598,13 @@ function Invoke-Diagnostics {
         })
     }
 
+    $taskExecutorWorkers = [int](Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "3")
+    $taskSlotsPerWorker = [int](Get-ConfigurationValue $configuration "MAX_CONCURRENT_TASKS" "1")
+    $builderSlotsPerWorker = [int](Get-ConfigurationValue $configuration "MAX_CONCURRENT_CHUNK_BUILDERS" "1")
+    $directWorkersPerTask = [int](Get-ConfigurationValue $configuration "PADDLEOCR_DIRECT_WORKERS" "8")
+    $parserSlotsPerWorker = [Math]::Min($taskSlotsPerWorker, $builderSlotsPerWorker)
+    $effectiveDirectRequests = $taskExecutorWorkers * $parserSlotsPerWorker * $directWorkersPerTask
+
     $report = [pscustomobject]@{
         GeneratedAt = (Get-Date).ToString("o")
         DockerServerVersion = $dockerServerVersion
@@ -451,6 +615,8 @@ function Invoke-Diagnostics {
             Api = $apiBase
             OfficialMcp = $officialMcpUrl
             ManagementMcp = $managementMcpUrl
+            PaddleOcr = $ocrUrl
+            PaddleOcrVl = $vlUrl
         }
         Connectivity = [pscustomobject]@{
             ApiPing = $apiReachable
@@ -462,13 +628,16 @@ function Invoke-Diagnostics {
             ApiProxyScheme = Get-ConfigurationValue $configuration "API_PROXY_SCHEME" "python"
             DocumentEngine = Get-ConfigurationValue $configuration "DOC_ENGINE"
             Profiles = Get-ConfigurationValue $configuration "COMPOSE_PROFILES"
-            TaskExecutorWorkers = Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "3"
+            TaskExecutorWorkers = $taskExecutorWorkers
+            ParserSlotsPerWorker = $parserSlotsPerWorker
+            PaddleOcrDirectWorkersPerTask = $directWorkersPerTask
+            PaddleOcrEffectiveMaxDirectRequests = $effectiveDirectRequests
             DocumentBulkSize = Get-ConfigurationValue $configuration "DOC_BULK_SIZE"
             EmbeddingBatchSize = Get-ConfigurationValue $configuration "EMBEDDING_BATCH_SIZE"
             ThreadPoolWorkers = Get-ConfigurationValue $configuration "THREAD_POOL_MAX_WORKERS"
             DoclingEnabled = Get-ConfigurationValue $configuration "USE_DOCLING"
             EmbeddingMode = if ($containerNames -contains "lig-ragflow-qwen3-embedding-1") { "optional Qwen3 TEI CPU service" } else { "configured in RAGFlow (external provider)" }
-            KoreanOcr = "PP-OCRv5 (CPU/GPU follows DEVICE)"
+            KoreanOcr = "PP-OCRv5 (CPU)"
             StandaloneDeepDocEnabled = ((Get-ConfigurationValue $configuration "COMPOSE_PROFILES") -split ',' -contains 'deepdoc')
         }
         Services = $composeRows | Select-Object Name, Service, State, Health, Status, Ports
@@ -478,6 +647,10 @@ function Invoke-Diagnostics {
             Database = $serviceHealth.database
             Redis = $serviceHealth.redis
         }} else { $null }
+        OcrHealth = [pscustomobject]@{
+            PaddleOcr = $ocrHealth
+            PaddleOcrVl = $vlHealth
+        }
         TaskExecutorHeartbeats = $heartbeats
         CurrentTaskExecutorHeartbeatCount = @($heartbeats | Where-Object { $_.CurrentContainer }).Count
         ContainerStats = $stats | Select-Object Name, CPUPerc, MemUsage, MemPerc, BlockIO, NetIO
@@ -494,7 +667,8 @@ switch ($Action) {
     "config" {
         Assert-LigConfiguration
         Invoke-Compose @("config", "--quiet")
-        Write-Host "RAGFlow Compose configuration is valid."
+        Assert-OcrDeviceTopology
+        Write-Host "RAGFlow Compose 설정이 정상입니다."
     }
     "pull" {
         Assert-FreeSpace
@@ -503,8 +677,8 @@ switch ($Action) {
     }
     "ui-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-3", $workspaceDirectory)
-        Write-Host "Built lig/ragflow-ui:v0.26.4-3"
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-4", $workspaceDirectory)
+        Write-Host "Built lig/ragflow-ui:v0.26.4-4"
     }
     "mcp-build" {
         Assert-FreeSpace
@@ -513,14 +687,13 @@ switch ($Action) {
     }
     "ocr-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-3", $ocrDirectory)
-        Write-Host "Built lig/paddleocr-ko:v0.26.4-3"
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-4", $ocrDirectory)
+        Write-Host "Built lig/paddleocr-ko:v0.26.4-4"
     }
     "gpu-build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $gpuUiDockerfile, "--tag", "lig/ragflow-ui-gpu:v0.26.4-3", $workspaceDirectory)
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=lig/ragflow-ui-gpu:v0.26.4-3", "--tag", "lig/paddleocr-ko-gpu:v0.26.4-3", $ocrDirectory)
-        Write-Host "Built LIG CUDA 12.8 RAGFlow and Korean PaddleOCR images."
+        Invoke-Docker @("build", "--file", $gpuUiDockerfile, "--tag", "lig/ragflow-ui-gpu:v0.26.4-4", $workspaceDirectory)
+        Write-Host "RAGFlow/DeepDOC용 CUDA 이미지를 빌드했습니다. 일반 PaddleOCR는 CPU 이미지를 공용으로 사용합니다."
     }
     "embedding-build" {
         Assert-FreeSpace
@@ -531,31 +704,39 @@ switch ($Action) {
     "paddleocr-vl-build" {
         Assert-FreeSpace
         $configuration = Get-EnvFileValues $ligEnvFile
+        $pipelineBaseImage = Get-ConfigurationValue $configuration "PADDLEOCR_VL_API_BASE_IMAGE"
+        $pipelineImage = Get-ConfigurationValue $configuration "PADDLEOCR_VL_API_IMAGE" "lig/paddleocr-vl-pipeline-cpu:1.6-1"
+        $vlmBaseImage = Get-ConfigurationValue $configuration "PADDLEOCR_VL_VLM_IMAGE"
+        $vlmImage = Get-ConfigurationValue $configuration "PADDLEOCR_VL_VLM_RUNTIME_IMAGE" "lig/paddleocr-vl-vlm:1.6-2"
         $gatewayImage = Get-ConfigurationValue $configuration "PADDLEOCR_VL_GATEWAY_IMAGE" "lig/paddleocr-vl-gateway:1.6-1"
+        if ([string]::IsNullOrWhiteSpace($pipelineBaseImage)) { throw "PaddleOCR-VL pipeline 기반 이미지 설정이 없습니다." }
+        Invoke-Docker @("build", "--file", $ocrVlPipelineCpuDockerfile, "--build-arg", "BASE_IMAGE=$pipelineBaseImage", "--tag", $pipelineImage, $ocrVlDirectory)
+        Invoke-Docker @("build", "--file", $ocrVlVlmDockerfile, "--build-arg", "BASE_IMAGE=$vlmBaseImage", "--tag", $vlmImage, $ocrVlDirectory)
         Invoke-Docker @("build", "--file", $ocrVlDockerfile, "--tag", $gatewayImage, $ocrVlDirectory)
-        Write-Host "PaddleOCR-VL-1.6 RAGFlow 호환 게이트웨이 이미지를 빌드했습니다."
+        Write-Host "PaddleOCR-VL-1.6 CPU pipeline과 RAGFlow 호환 게이트웨이 이미지를 빌드했습니다."
     }
     "paddleocr-vl-pull" {
         Assert-FreeSpace
         $configuration = Get-EnvFileValues $ligEnvFile
         foreach ($image in @(
-            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_API_IMAGE"),
+            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_API_BASE_IMAGE"),
             (Get-ConfigurationValue $configuration "PADDLEOCR_VL_VLM_IMAGE")
         )) {
             if ([string]::IsNullOrWhiteSpace($image)) { throw "PaddleOCR-VL 공식 이미지 설정이 없습니다." }
             Invoke-Docker @("pull", $image)
         }
-        Write-Host "PaddleOCR-VL-1.6 공식 오프라인 GPU 이미지를 받았습니다."
+        Write-Host "PaddleOCR-VL-1.6 공식 오프라인 pipeline 기반 이미지와 VLM 이미지를 받았습니다."
     }
     "build" {
         Assert-FreeSpace
-        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-3", $workspaceDirectory)
+        Invoke-Docker @("build", "--file", $uiDockerfile, "--tag", "lig/ragflow-ui:v0.26.4-4", $workspaceDirectory)
         Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", "lig/ragflow-mcp:v0.26.4-3", $mcpDirectory)
-        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-3", $ocrDirectory)
+        Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", "lig/paddleocr-ko:v0.26.4-4", $ocrDirectory)
         Write-Host "Built LIG UI, management MCP, and Korean PaddleOCR images."
     }
     "start" {
         Assert-LigConfiguration
+        Assert-OcrDeviceTopology
         Assert-FreeSpace
         $configuration = Get-EnvFileValues $ligEnvFile
         $device = (Get-ConfigurationValue $configuration "DEVICE" "cpu").Trim().ToLowerInvariant()
@@ -568,15 +749,11 @@ switch ($Action) {
         } else {
             Get-ConfigurationValue $configuration "RAGFLOW_IMAGE"
         }
-        $ocrImage = if ($device -eq "gpu") {
-            Get-ConfigurationValue $configuration "PADDLEOCR_GPU_IMAGE"
-        } else {
-            Get-ConfigurationValue $configuration "PADDLEOCR_IMAGE"
-        }
+        $ocrImage = Get-ConfigurationValue $configuration "PADDLEOCR_IMAGE"
         $mcpImage = Get-ConfigurationValue $configuration "RAGFLOW_MCP_LIG_IMAGE" "lig/ragflow-mcp:v0.26.4-3"
         foreach ($requiredImage in @($ragflowImage, $ocrImage, $mcpImage)) {
             if ([string]::IsNullOrWhiteSpace($requiredImage)) {
-                throw "Required $device image configuration is missing. Check RAGFLOW_IMAGE, RAGFLOW_GPU_IMAGE, PADDLEOCR_IMAGE, PADDLEOCR_GPU_IMAGE, and RAGFLOW_MCP_LIG_IMAGE."
+                throw "필수 이미지 설정이 없습니다. RAGFLOW_IMAGE, RAGFLOW_GPU_IMAGE, PADDLEOCR_IMAGE, RAGFLOW_MCP_LIG_IMAGE를 확인하십시오."
             }
         }
 
@@ -600,13 +777,10 @@ switch ($Action) {
         }
         $ocrImageInspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $ocrImage) -AllowFailure
         if ($ocrImageInspect.ExitCode -ne 0) {
-            if ($device -eq "gpu") {
-                throw "Required GPU PaddleOCR image is missing: $ocrImage. Run gpu-build or import the GPU air-gap bundle first."
-            }
             if (-not (Test-Path -LiteralPath $ocrDockerfile -PathType Leaf)) {
                 throw "Korean PaddleOCR image is missing and its Dockerfile is unavailable: $ocrDockerfile"
             }
-            Invoke-Docker @("build", "--file", $ocrDockerfile, "--build-arg", "BASE_IMAGE=$ragflowImage", "--tag", $ocrImage, $ocrDirectory)
+            Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", $ocrImage, $ocrDirectory)
         }
         # Start asynchronously. RAGFlow's health check verifies every backing
         # service and can remain in "Waiting" long after the containers have
@@ -630,7 +804,7 @@ switch ($Action) {
         $configuration = Get-EnvFileValues $ligEnvFile
         $images = @(
             (Get-ConfigurationValue $configuration "PADDLEOCR_VL_API_IMAGE"),
-            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_VLM_IMAGE"),
+            (Get-ConfigurationValue $configuration "PADDLEOCR_VL_VLM_RUNTIME_IMAGE"),
             (Get-ConfigurationValue $configuration "PADDLEOCR_VL_GATEWAY_IMAGE" "lig/paddleocr-vl-gateway:1.6-1")
         )
         foreach ($image in $images) {
@@ -639,6 +813,26 @@ switch ($Action) {
                 throw "PaddleOCR-VL 이미지가 없습니다: $image. paddleocr-vl-pull 또는 paddleocr-vl-build를 먼저 실행하십시오."
             }
         }
+        $pipelineCheck = Invoke-DockerCapture -Arguments @(
+            "run", "--rm", "--entrypoint", "python", $images[0], "-c",
+            "import paddle; assert not paddle.device.is_compiled_with_cuda(); print('PaddleOCR-VL pipeline:', paddle.__version__, 'CPU')"
+        ) -AllowFailure
+        if ($pipelineCheck.ExitCode -ne 0) {
+            throw "PaddleOCR-VL pipeline 이미지가 CPU 전용이 아닙니다. paddleocr-vl-build를 다시 실행하십시오."
+        }
+        $pipelineCheck.Lines | ForEach-Object { Write-Host $_ }
+        Write-Host "PaddleOCR-VL 시작 구성: 일반 PP-OCRv5=CPU, VL 레이아웃=CPU, VL 0.9B VLM=GPU"
+        Write-Host "VLM 설정: GPU 비율 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_GPU_MEMORY_UTILIZATION' '0.60'), 컨텍스트 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_MODEL_LEN' '16384'), 배치 토큰 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS' '16384'), API 서버 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_API_SERVER_COUNT' '1')"
+        $gpuCheck = Invoke-DockerCapture -Arguments @(
+            "run", "--rm", "--gpus", "all", "--entrypoint", "nvidia-smi", $images[1],
+            "--query-gpu=name,memory.total,memory.used,memory.free,driver_version",
+            "--format=csv,noheader"
+        ) -AllowFailure
+        if ($gpuCheck.ExitCode -ne 0) {
+            throw "NVIDIA GPU를 PaddleOCR-VL 컨테이너에서 사용할 수 없습니다. 드라이버와 NVIDIA Container Toolkit을 확인하십시오."
+        }
+        Write-Host "PaddleOCR-VL 시작 전 GPU 상태:"
+        $gpuCheck.Lines | ForEach-Object { Write-Host $_ }
         Invoke-Compose @("--profile", "paddleocr-vl", "up", "-d", "paddleocr-vl-vlm", "paddleocr-vl-api", "paddleocr-vl")
         Invoke-Compose @("--profile", "paddleocr-vl", "ps", "paddleocr-vl-vlm", "paddleocr-vl-api", "paddleocr-vl")
     }
@@ -647,17 +841,38 @@ switch ($Action) {
     }
     "paddleocr-vl-status" {
         Invoke-Compose @("--profile", "paddleocr-vl", "ps", "paddleocr-vl-vlm", "paddleocr-vl-api", "paddleocr-vl")
+        $configuration = Get-EnvFileValues $ligEnvFile
+        Write-Host ""
+        Write-Host "장치 배치: PP-OCRv5=CPU | VL 레이아웃=CPU | VL VLM=GPU"
+        Write-Host "VLM 메모리 비율=$(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_GPU_MEMORY_UTILIZATION' '0.60'), 최대 배치 토큰=$(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS' '16384'), 최대 시퀀스=$(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_NUM_SEQS' '8')"
+        $vlmContainer = Get-ComposeServiceContainerId "paddleocr-vl-vlm"
+        Show-PaddleOcrVlGpuSummary $vlmContainer
+        if ($vlmContainer) {
+            $vlmLogs = Invoke-DockerCapture -Arguments @("logs", "--tail", "300", $vlmContainer) -AllowFailure
+            $memoryErrors = @($vlmLogs.Lines | Where-Object { $_ -match '(?i)(No available memory for the cache blocks|out of memory|CUDA.*memory|KV cache)' } | Select-Object -Last 10)
+            if ($memoryErrors.Count) {
+                Write-Warning "최근 VLM 메모리 오류가 발견됐습니다:"
+                $memoryErrors | ForEach-Object { Write-Host $_ }
+            }
+        }
     }
     "paddleocr-vl-test" {
         $configuration = Get-EnvFileValues $ligEnvFile
         $binding = Get-ConfigurationValue $configuration "PADDLEOCR_VL_PORT" "127.0.0.1:42318"
         $port = ($binding -split ':')[-1]
         if ($port -notmatch '^\d+$') { throw "PADDLEOCR_VL_PORT는 숫자 포트로 끝나야 합니다. 현재 값: $binding" }
+        foreach ($service in @("paddleocr-vl-vlm", "paddleocr-vl-api")) {
+            $containerId = Get-ComposeServiceContainerId $service
+            if (-not $containerId) { throw "$service 컨테이너가 없습니다." }
+            $probe = Invoke-DockerCapture -Arguments @("exec", $containerId, "curl", "-fsS", "http://127.0.0.1:8080/health") -AllowFailure
+            if ($probe.ExitCode -ne 0) { throw "$service 내부 상태 확인에 실패했습니다." }
+            Write-Host "$service 내부 상태 정상"
+        }
         $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 15
         if ($health.status -ne "ok" -or $health.model -ne "PaddleOCR-VL-1.6") {
             throw "PaddleOCR-VL 상태 응답이 올바르지 않습니다."
         }
-        Write-Host "PaddleOCR-VL-1.6 pipeline과 RAGFlow 호환 게이트웨이가 정상입니다."
+        Write-Host "PaddleOCR-VL-1.6 VLM, CPU pipeline, RAGFlow 호환 게이트웨이가 모두 정상입니다."
     }
     "embedding-stop" {
         Invoke-Compose @("--profile", "embedding-cpu", "stop", "qwen3-embedding", "qwen3-embedding-tei")

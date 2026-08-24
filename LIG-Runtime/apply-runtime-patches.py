@@ -35,6 +35,10 @@ EXPECTED_INFINITY_CONN_SHA256 = "85cb001ff451960331731785fa7d13e69c1017b37f2f967
 EXPECTED_INFINITY_CONN_BASE_SHA256 = "d3a1dfd788ab657c82a5711cb4a6e0e4c9c6c605e4451b6283473c72ddd5cfde"
 EXPECTED_DOCUMENT_SERVICE_SHA256 = "02cf6c5e9a1732d7ee5bb2fb094cb8661bdab31aa2ee5fee5876003cc77734b5"
 EXPECTED_TASK_EXECUTOR_LIMITER_SHA256 = "9d71b0c22e56b5c7e6b333a80aa83ce9de844f3c0a5ef4e65755660b67d54354"
+EXPECTED_SETTINGS_SHA256 = "c81b2b13f2a19a01892a9208cb5df3753f5845616b6655eec6c71f5dca741610"
+EXPECTED_DEEPDOC_OCR_SHA256 = "a4b1c380046584124edacb1d14c2c11fe293e843c0ae32bbe3e3a8a26b8474e3"
+EXPECTED_DB_MODELS_SHA256 = "26d9734b0b249c207e887d40bbe2734235e5d66c1805c9be5f05743605daced4"
+EXPECTED_DATASET_API_SERVICE_SHA256 = "d00fdaad3cfcd533f6dcc13f5dd653d7bb8db27bc13dc8b727cafae5247c4907"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
 NEW_TIMEOUT = (
     'headers={"Content-Type": "application/json"}, '
@@ -57,7 +61,7 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 29:
+    if len(sys.argv) != 33:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
@@ -68,7 +72,8 @@ def main() -> None:
             "<redis_conn.py> <tenant_model_service.py> <api_apps_init.py> <admin_server.py> "
             "<embedding_service.py> <dataflow_service.py> <ocr_model.py> "
             "<infinity_conn.py> <infinity_conn_base.py> <document_service.py> "
-            "<task_executor_limiter.py>"
+            "<task_executor_limiter.py> <settings.py> <deepdoc_ocr.py> "
+            "<db_models.py> <dataset_api_service.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -169,8 +174,187 @@ def main() -> None:
     text = replace_once(
         text,
         "import json\nimport logging\nimport os\nimport re\nimport tempfile\nimport time\n",
-        "import hashlib\nimport json\nimport logging\nimport os\nimport re\nimport tempfile\nimport threading\nimport time\n",
+        "import base64\nimport hashlib\nimport json\nimport logging\nimport os\nimport re\nimport tempfile\nimport threading\nimport time\nfrom concurrent.futures import ThreadPoolExecutor\n",
         "PaddleOCR outline cache imports",
+    )
+    text = replace_once(
+        text,
+        "    request_timeout: int = 600\n"
+        "    prettify_markdown: bool = True\n",
+        '    api_mode: Literal["auto", "job", "direct-image"] = "auto"\n'
+        "    direct_workers: int = 8\n"
+        "    direct_render_dpi: int = 144\n"
+        "    request_timeout: int = 600\n"
+        "    prettify_markdown: bool = True\n",
+        "PaddleOCR API mode configuration",
+    )
+    text = replace_once(
+        text,
+        "        if not self.access_token:\n"
+        "            return False, \"[PaddleOCR] Access token not configured\"\n\n"
+        "        return True, \"\"\n",
+        "        if not self.base_url:\n"
+        "            return False, \"[PaddleOCR] Base URL not configured\"\n\n"
+        "        return True, \"\"\n",
+        "optional PaddleOCR access token",
+    )
+    text = replace_once(
+        text,
+        "        algorithm = cfg.get(\"algorithm\", \"PaddleOCR-VL\")\n\n"
+        "        # Validate algorithm\n",
+        "        algorithm = cfg.get(\"algorithm\", \"PaddleOCR-VL\")\n"
+        "        api_mode = cfg.get(\"api_mode\", \"auto\")\n"
+        "        if api_mode not in {\"auto\", \"job\", \"direct-image\"}:\n"
+        "            raise ValueError(f\"Unsupported PaddleOCR API mode: {api_mode}\")\n"
+        "        try:\n"
+        "            cfg[\"direct_workers\"] = max(1, int(cfg.get(\"direct_workers\", 8)))\n"
+        "        except (TypeError, ValueError):\n"
+        "            raise ValueError(\"PaddleOCR direct_workers must be a positive integer\")\n"
+        "        try:\n"
+        "            cfg[\"direct_render_dpi\"] = int(cfg.get(\"direct_render_dpi\", 144))\n"
+        "            if cfg[\"direct_render_dpi\"] < 1:\n"
+        "                raise ValueError\n"
+        "        except (TypeError, ValueError):\n"
+        "            raise ValueError(\"PaddleOCR direct_render_dpi must be a positive integer\")\n\n"
+        "        # Validate algorithm\n",
+        "PaddleOCR API mode validation",
+    )
+    text = replace_once(
+        text,
+        "        request_timeout: int = 600,\n"
+        "    ):\n"
+        '        """Initialize PaddleOCR parser."""\n',
+        '        api_mode: Literal["auto", "job", "direct-image"] = "auto",\n'
+        "        direct_workers: int = 8,\n"
+        "        direct_render_dpi: int = 144,\n"
+        "        request_timeout: int = 600,\n"
+        "    ):\n"
+        '        """Initialize PaddleOCR parser."""\n',
+        "PaddleOCR parser API mode parameters",
+    )
+    text = replace_once(
+        text,
+        "        self.algorithm = algorithm\n"
+        "        self.request_timeout = request_timeout\n",
+        "        self.algorithm = algorithm\n"
+        "        self.api_mode = api_mode\n"
+        "        self.direct_workers = max(1, int(direct_workers))\n"
+        "        self.direct_render_dpi = int(direct_render_dpi)\n"
+        "        if self.direct_render_dpi < 1:\n"
+        "            raise ValueError(\"PaddleOCR direct_render_dpi must be a positive integer\")\n"
+        "        self.request_timeout = request_timeout\n",
+        "PaddleOCR parser API mode state",
+    )
+    config_anchor = '            "request_timeout": request_timeout if request_timeout is not None else self.request_timeout,\n'
+    if text.count(config_anchor) != 2:
+        raise SystemExit("Expected PDF and image PaddleOCR request configuration sites")
+    text = text.replace(
+        config_anchor,
+        '            "api_mode": kwargs.get("api_mode", self.api_mode),\n'
+        '            "direct_workers": kwargs.get("direct_workers", self.direct_workers),\n'
+        '            "direct_render_dpi": kwargs.get("direct_render_dpi", self.direct_render_dpi),\n'
+        + config_anchor,
+    )
+    text = replace_once(
+        text,
+        "    def _send_request(self, data: bytes, config: PaddleOCRConfig, callback: Optional[Callable[[float, str], None]]) -> dict[str, Any]:\n"
+        '        """Send request to PaddleOCR async Job API (submit → poll → fetch)."""\n'
+        "        optional_payload = self._build_payload(data, self.file_type, config)\n",
+        "    def _resolved_api_mode(self, config: PaddleOCRConfig) -> str:\n"
+        '        if config.api_mode not in {"auto", "job", "direct-image"}:\n'
+        '            raise ValueError(f"Unsupported PaddleOCR API mode: {config.api_mode}")\n'
+        '        if config.api_mode != "auto":\n'
+        "            return config.api_mode\n"
+        '        host = requests.utils.urlparse(config.base_url).hostname or ""\n'
+        '        return "job" if host in {"paddleocr", "paddleocr-vl", "127.0.0.1", "localhost"} else "direct-image"\n\n'
+        "    @staticmethod\n"
+        "    def _is_pdf_data(data: bytes) -> bool:\n"
+        "        if b\"%PDF-\" in data[:1024]:\n"
+        "            return True\n"
+        "        image_signatures = (b\"\\xff\\xd8\\xff\", b\"\\x89PNG\\r\\n\\x1a\\n\", b\"GIF87a\", b\"GIF89a\", b\"II*\\x00\", b\"MM\\x00*\", b\"BM\")\n"
+        "        if data.startswith(image_signatures) or (data.startswith(b\"RIFF\") and data[8:12] == b\"WEBP\"):\n"
+        "            return False\n"
+        "        try:\n"
+        "            return bool(PdfReader(BytesIO(data), strict=False).pages)\n"
+        "        except Exception:\n"
+        "            return False\n\n"
+        "    def _send_direct_images(self, data: bytes, config: PaddleOCRConfig, callback: Optional[Callable[[float, str], None]]) -> dict[str, Any]:\n"
+        "        headers = {\"Client-Platform\": \"ragflow\"}\n"
+        "        if config.access_token:\n"
+        '            headers["Authorization"] = f"Bearer {config.access_token}"\n'
+        "        completed = 0\n"
+        "        progress_lock = threading.Lock()\n\n"
+        "        def submit(index_and_image, total_pages):\n"
+        "            nonlocal completed\n"
+        "            index, image = index_and_image\n"
+        "            output = BytesIO()\n"
+        '            image.convert("RGB").save(output, format="JPEG", quality=92)\n'
+        "            payload = self._build_payload(output.getvalue(), 1, config)\n"
+        '            payload["file"] = base64.b64encode(output.getvalue()).decode("ascii")\n'
+        '            payload["fileType"] = 1\n'
+        "            response = requests.post(config.base_url, json=payload, headers=headers, timeout=config.request_timeout)\n"
+        "            if response.status_code != 200:\n"
+        '                raise RuntimeError(f"[PaddleOCR] direct page {index + 1} failed: HTTP {response.status_code} {response.text[:200]}")\n'
+        "            body = response.json()\n"
+        "            if body.get(\"errorCode\") not in (None, 0):\n"
+        '                raise RuntimeError(f"[PaddleOCR] direct page {index + 1} failed: {body.get(\'errorMsg\')}")\n'
+        "            with progress_lock:\n"
+        "                completed += 1\n"
+        "                if callback:\n"
+        '                    callback(0.1 + 0.6 * completed / total_pages, f"[PaddleOCR] direct pages: {completed}/{total_pages}")\n'
+        "            return index, body.get(\"result\", body)\n\n"
+        "        page_results = []\n"
+        "        if self._is_pdf_data(data):\n"
+        "            render_dpi = config.direct_render_dpi\n"
+        "            with pdfplumber.open(BytesIO(data)) as pdf:\n"
+        "                total_pages = len(pdf.pages)\n"
+        "                if total_pages < 1:\n"
+        "                    raise ValueError(\"[PaddleOCR] PDF contains no pages\")\n"
+        "                workers = min(config.direct_workers, total_pages)\n"
+        "                for start in range(0, total_pages, workers):\n"
+        "                    stop = min(start + workers, total_pages)\n"
+        "                    images = [pdf.pages[index].to_image(resolution=render_dpi, antialias=True).original for index in range(start, stop)]\n"
+        "                    try:\n"
+        "                        indexed = list(zip(range(start, stop), images))\n"
+        "                        with ThreadPoolExecutor(max_workers=len(indexed), thread_name_prefix=\"paddleocr-direct\") as executor:\n"
+        "                            page_results.extend(executor.map(lambda item: submit(item, total_pages), indexed))\n"
+        "                    finally:\n"
+        "                        for image in images:\n"
+        "                            image.close()\n"
+        "        else:\n"
+        "            with Image.open(BytesIO(data)) as image:\n"
+        '                page_image = image.convert("RGB").copy()\n'
+        "            try:\n"
+        "                page_results.append(submit((0, page_image), 1))\n"
+        "            finally:\n"
+        "                page_image.close()\n"
+        "        page_results.sort(key=lambda item: item[0])\n"
+        "        combined = {\"layoutParsingResults\": [], \"ocrResults\": []}\n"
+        "        for _, result in page_results:\n"
+        "            combined[\"layoutParsingResults\"].extend(result.get(\"layoutParsingResults\", []))\n"
+        "            combined[\"ocrResults\"].extend(result.get(\"ocrResults\", []))\n"
+        "        return combined\n\n"
+        "    def _send_request(self, data: bytes, config: PaddleOCRConfig, callback: Optional[Callable[[float, str], None]]) -> dict[str, Any]:\n"
+        '        """Send a local Job API request or page images to a direct PaddleX API."""\n'
+        "        mode = self._resolved_api_mode(config)\n"
+        '        self.logger.info("[PaddleOCR] API mode=%s endpoint=%s", mode, config.base_url)\n'
+        '        if mode == "direct-image":\n'
+        "            return self._send_direct_images(data, config, callback)\n"
+        "        optional_payload = self._build_payload(data, self.file_type, config)\n",
+        "PaddleOCR direct-image adapter",
+    )
+    text = replace_once(
+        text,
+        '            form_data = {\n'
+        '                "model": config.algorithm,\n'
+        '                "optionalPayload": json.dumps(optional_payload),\n'
+        '            }\n',
+        '            form_data = {\n'
+        '                "model": config.algorithm,\n'
+        '                "renderDpi": str(config.direct_render_dpi),\n'
+        '                "optionalPayload": json.dumps(optional_payload),\n'
+        '            }\n',
+        "PaddleOCR Job API render DPI forwarding",
     )
     text = replace_once(
         text,
@@ -935,7 +1119,7 @@ def main() -> None:
     text = replace_once(
         text,
         "TASK_MAX_LOG_LENGTH = int(os.environ.get(\"TASK_MAX_LOG_LENGTH\", 3000))  # TEXT MAX is 64 KiB bytes!\n",
-        "TASK_MAX_LOG_LENGTH = int(os.environ.get(\"TASK_MAX_LOG_LENGTH\", 3000))  # TEXT MAX is 64 KiB bytes!\n"
+        "TASK_MAX_LOG_LENGTH = int(os.environ.get(\"TASK_MAX_LOG_LENGTH\", \"262144\"))\n"
         "TASK_MAX_CRASH_RETRIES = int(os.environ.get(\"TASK_MAX_CRASH_RETRIES\", \"0\"))\n",
         "configurable crash retry policy",
     )
@@ -988,7 +1172,7 @@ def main() -> None:
     text = replace_once(
         text,
         '        page_size = doc["parser_config"].get("task_page_size") or 12\n',
-        '        page_size = max(1, int(doc["parser_config"].get("task_page_size") or os.environ.get("PDF_TASK_PAGE_SIZE", "12")))\n',
+        '        page_size = max(1, int(doc["parser_config"].get("task_page_size") or os.environ.get("PDF_TASK_PAGE_SIZE", "40")))\n',
         "global PDF task page size default",
     )
     text = replace_once(
@@ -998,12 +1182,12 @@ def main() -> None:
         '        if doc["parser_id"] in ["one", "knowledge_graph"] or doc["parser_config"].get("toc_extraction", False):\n'
         '            page_size = MAXIMUM_TASK_PAGE_NUMBER\n',
         '        if doc["parser_id"] == "paper":\n'
-        '            page_size = max(1, int(doc["parser_config"].get("task_page_size") or os.environ.get("PDF_TASK_PAGE_SIZE", "22")))\n'
+        '            page_size = max(1, int(doc["parser_config"].get("task_page_size") or os.environ.get("PDF_TASK_PAGE_SIZE", "40")))\n'
         '        if doc["parser_id"] in ["one", "knowledge_graph"] or doc["parser_config"].get("toc_extraction", False):\n'
         '            page_size = MAXIMUM_TASK_PAGE_NUMBER\n'
         '        layout_recognizer, _ = normalize_layout_recognizer(doc["parser_config"].get("layout_recognize", "DeepDOC"))\n'
         '        if layout_recognizer == "PaddleOCR":\n'
-        '            paddleocr_page_size = max(1, int(os.environ.get("PADDLEOCR_TASK_PAGE_SIZE", "12")))\n'
+        '            paddleocr_page_size = max(1, int(os.environ.get("PADDLEOCR_TASK_PAGE_SIZE", "40")))\n'
         '            page_size = min(page_size, paddleocr_page_size)\n'
         '        page_size = adaptive_pdf_task_page_size(page_size)\n',
         "PaddleOCR task page size application",
@@ -1048,6 +1232,12 @@ def main() -> None:
         "            if from_upstream.name.split(\".\")[-1].lower() not in conf.get(\"suffix\", []):\n",
         "            if name.split(\".\")[-1].lower() not in conf.get(\"suffix\", []):\n",
         "prepared pipeline filename selection",
+    )
+    text = replace_once(
+        text,
+        '                return get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR) or ensure_paddleocr_from_env(tenant_id)\n',
+        '                return ensure_paddleocr_from_env(tenant_id) or get_first_provider_model_name(tenant_id, "PaddleOCR", LLMType.OCR)\n',
+        "deterministic default PaddleOCR profile",
     )
     pipeline_parser_target.write_text(text, encoding="utf-8")
 
@@ -1296,6 +1486,7 @@ def main() -> None:
         "            if callback:\n"
         '                callback(0.4, f"[PaddleOCR] all PDF parsers returned no content: {exc}")\n'
         "            return [], [], None\n\n"
+        "    explicit_paddleocr_model = bool(paddleocr_llm_name)\n"
         "    pdf_parser = None\n"
         "    if tenant_id:\n"
         "        if not paddleocr_llm_name:\n"
@@ -1322,6 +1513,8 @@ def main() -> None:
         '                return fallback("the OCR result contained no text sections")\n'
         "            except Exception as e:\n"
         '                logging.error(f"Failed to parse pdf via LLMBundle PaddleOCR ({paddleocr_llm_name}): {e}")\n'
+        "                if explicit_paddleocr_model:\n"
+        '                    raise RuntimeError(f"Configured PaddleOCR model {paddleocr_llm_name!r} is unavailable: {e}") from e\n'
         '                return fallback(f"request failed: {e}")\n\n'
         '        return fallback("no PaddleOCR model is configured")\n\n'
         '    return fallback("tenant information is unavailable")\n',
@@ -1545,24 +1738,118 @@ def main() -> None:
     text = tenant_model_target.read_text(encoding="utf-8")
     text = replace_once(
         text,
+        "import logging\nimport os\nimport enum\nimport json\n",
+        "import logging\nimport os\nimport enum\nimport json\nimport time\nfrom urllib.parse import urlsplit\n\nimport requests\n",
+        "PaddleOCR profile health imports",
+    )
+    text = replace_once(
+        text,
+        "from api.db.services.tenant_llm_service import TenantService\n",
+        "from api.db.db_models import DB, Document, Knowledgebase\n"
+        "from api.db.services.tenant_llm_service import TenantService\n",
+        "PaddleOCR profile migration models",
+    )
+    text = replace_once(
+        text,
+        "def _ensure_ocr_provider_from_env(tenant_id: str, provider_name: str, model_name: str, config: dict | None) -> str | None:\n",
+        "_OCR_ENDPOINT_HEALTH_CACHE: dict[str, tuple[float, bool]] = {}\n\n\n"
+        "def _ocr_endpoint_available(base_url: str, cache_seconds: float = 5.0) -> bool:\n"
+        "    now = time.monotonic()\n"
+        "    cached = _OCR_ENDPOINT_HEALTH_CACHE.get(base_url)\n"
+        "    if cached and now - cached[0] < cache_seconds:\n"
+        "        return cached[1]\n"
+        "    parts = urlsplit(base_url)\n"
+        "    if not parts.scheme or not parts.netloc:\n"
+        "        available = False\n"
+        "    else:\n"
+        "        health_url = f\"{parts.scheme}://{parts.netloc}/health\"\n"
+        "        try:\n"
+        "            response = requests.get(health_url, timeout=1.0)\n"
+        "            available = response.ok and response.json().get(\"status\") == \"ok\"\n"
+        "        except (requests.RequestException, ValueError, TypeError):\n"
+        "            available = False\n"
+        "    _OCR_ENDPOINT_HEALTH_CACHE[base_url] = (now, available)\n"
+        "    return available\n\n\n"
+        "def _set_ocr_profile_status(provider_obj, instance_name: str, active: bool) -> bool:\n"
+        "    instance_obj = TenantModelInstanceService.get_by_provider_id_and_instance_name(provider_obj.id, instance_name)\n"
+        "    if not instance_obj:\n"
+        "        return False\n"
+        "    desired = ActiveStatusEnum.ACTIVE.value if active else ActiveStatusEnum.INACTIVE.value\n"
+        "    changed = False\n"
+        "    if instance_obj.status != desired:\n"
+        "        TenantModelInstanceService.update_by_id(instance_obj.id, {\"status\": desired})\n"
+        "        changed = True\n"
+        "    models = TenantModelService.get_models_by_instance_id(instance_obj.id)\n"
+        "    changed_models = [model.id for model in models if model.status != desired]\n"
+        "    if changed_models:\n"
+        "        TenantModelService.batch_update_model_status(changed_models, desired)\n"
+        "        changed = True\n"
+        "    return changed\n\n\n"
+        "def _replace_profile_reference(value, old_name: str, new_name: str):\n"
+        "    if isinstance(value, dict):\n"
+        "        replaced = {}\n"
+        "        changed = 0\n"
+        "        for key, item in value.items():\n"
+        "            new_item, item_changed = _replace_profile_reference(item, old_name, new_name)\n"
+        "            replaced[key] = new_item\n"
+        "            changed += item_changed\n"
+        "        return replaced, changed\n"
+        "    if isinstance(value, list):\n"
+        "        replaced = []\n"
+        "        changed = 0\n"
+        "        for item in value:\n"
+        "            new_item, item_changed = _replace_profile_reference(item, old_name, new_name)\n"
+        "            replaced.append(new_item)\n"
+        "            changed += item_changed\n"
+        "        return replaced, changed\n"
+        "    if isinstance(value, str):\n"
+        "        occurrences = value.count(old_name)\n"
+        "        return value.replace(old_name, new_name), occurrences\n"
+        "    return value, 0\n\n\n"
+        "def _migrate_profile_references(tenant_id: str, provider_name: str, old_instance_name: str, canonical_instance_name: str, model_name: str) -> int:\n"
+        "    old_composite = f\"{model_name}@{old_instance_name}@{provider_name}\"\n"
+        "    new_composite = f\"{model_name}@{canonical_instance_name}@{provider_name}\"\n"
+        "    changed = 0\n"
+        "    knowledgebases = list(Knowledgebase.select().where(Knowledgebase.tenant_id == tenant_id))\n"
+        "    kb_ids = [kb.id for kb in knowledgebases]\n"
+        "    documents = list(Document.select().where(Document.kb_id.in_(kb_ids))) if kb_ids else []\n"
+        "    with DB.atomic():\n"
+        "        for record in [*knowledgebases, *documents]:\n"
+        "            parser_config, count = _replace_profile_reference(record.parser_config or {}, old_composite, new_composite)\n"
+        "            if not count:\n"
+        "                continue\n"
+        "            record.parser_config = parser_config\n"
+        "            record.save(only=[record.__class__.parser_config])\n"
+        "            changed += count\n"
+        "    return changed\n\n\n"
+        "def _ensure_ocr_provider_from_env(tenant_id: str, provider_name: str, model_name: str, config: dict | None) -> str | None:\n",
+        "PaddleOCR profile lifecycle and reference migration helpers",
+    )
+    text = replace_once(
+        text,
         "def get_tenant_default_model_by_type(tenant_id: str, model_type: str | enum.Enum):\n",
         "def ensure_paddleocr_vl_from_env(tenant_id: str) -> str | None:\n"
         '    if os.environ.get("PADDLEOCR_VL_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:\n'
         "        return None\n"
         "    base_url = os.environ.get(\"PADDLEOCR_VL_BASE_URL\")\n"
-        "    access_token = os.environ.get(\"PADDLEOCR_ACCESS_TOKEN\")\n"
+        "    access_token = os.environ.get(\"PADDLEOCR_VL_ACCESS_TOKEN\")\n"
         "    if not base_url or not access_token:\n"
         "        return None\n"
         "    config = dict(PADDLEOCR_DEFAULT_CONFIG)\n"
         '    config["PADDLEOCR_BASE_URL"] = base_url\n'
         '    config["PADDLEOCR_ACCESS_TOKEN"] = access_token\n'
         '    config["PADDLEOCR_ALGORITHM"] = os.environ.get("PADDLEOCR_VL_MODEL", "PaddleOCR-VL-1.6")\n'
-        "    return _ensure_ocr_provider_from_env(\n"
+        "    model = _ensure_ocr_provider_from_env(\n"
         "        tenant_id,\n"
         '        "PaddleOCR",\n'
         '        "paddleocr-vl-from-env",\n'
         "        config,\n"
-        "    )\n\n\n"
+        "    )\n"
+        "    provider_obj = TenantModelProviderService.get_by_tenant_id_and_provider_name(tenant_id, \"PaddleOCR\")\n"
+        "    available = _ocr_endpoint_available(base_url)\n"
+        "    if provider_obj and _set_ocr_profile_status(provider_obj, \"paddleocr-vl-from-env\", available):\n"
+        "        logging.info(\"PaddleOCR-VL bundled profile is now %s for tenant %s\", \"active\" if available else \"inactive\", tenant_id)\n"
+        "    return model if available else None\n\n\n"
         "def get_tenant_default_model_by_type(tenant_id: str, model_type: str | enum.Enum):\n",
         "environment-managed PaddleOCR-VL provider",
     )
@@ -1589,9 +1876,79 @@ def main() -> None:
         "        instance_obj = TenantModelInstanceService.get_by_provider_id_and_instance_name(provider_obj.id, model_name)\n"
         "        if not instance_obj:\n"
         "            raise RuntimeError(f\"Failed to create {provider_name} model instance for tenant {tenant_id}\")\n"
-        "    if instance_obj.api_key != api_key:\n"
-        "        TenantModelInstanceService.update_by_id(instance_obj.id, {\"api_key\": api_key})\n\n",
-        "environment-managed OCR provider refresh",
+        "    # Existing instances may have been edited in the UI. Do not overwrite\n"
+        "    # their shared database configuration from one container's environment.\n"
+        "    # Retire only legacy auto-suffixed copies that are semantically identical\n"
+        "    # to the canonical bundled profile. Rewrite dataset and document references\n"
+        "    # transactionally before disabling the duplicate rows.\n"
+        "    if model_name in {\"paddleocr-from-env\", \"paddleocr-vl-from-env\"}:\n"
+        "        try:\n"
+        "            canonical_config = json.loads(instance_obj.api_key)\n"
+        "        except (TypeError, ValueError, json.JSONDecodeError):\n"
+        "            canonical_config = None\n"
+        "        if canonical_config is not None:\n"
+        "            duplicate_prefix = f\"{model_name}(\"\n"
+        "            for candidate in TenantModelInstanceService.get_all_by_provider_id(provider_obj.id):\n"
+        "                suffix = candidate.instance_name[len(duplicate_prefix):-1] if (\n"
+        "                    candidate.instance_name.startswith(duplicate_prefix)\n"
+        "                    and candidate.instance_name.endswith(\")\")\n"
+        "                ) else \"\"\n"
+        "                if not suffix.isdigit():\n"
+        "                    continue\n"
+        "                try:\n"
+        "                    candidate_config = json.loads(candidate.api_key)\n"
+        "                except (TypeError, ValueError, json.JSONDecodeError):\n"
+        "                    continue\n"
+        "                canonical_url = str(canonical_config.get(\"PADDLEOCR_BASE_URL\", \"\")).rstrip(\"/\")\n"
+        "                candidate_url = str(candidate_config.get(\"PADDLEOCR_BASE_URL\", \"\")).rstrip(\"/\")\n"
+        "                if candidate_url != canonical_url or candidate_config.get(\"PADDLEOCR_ALGORITHM\") != canonical_config.get(\"PADDLEOCR_ALGORITHM\"):\n"
+        "                    continue\n"
+        "                migrated = _migrate_profile_references(\n"
+        "                    tenant_id, provider_name, candidate.instance_name, instance_obj.instance_name, model_name\n"
+        "                )\n"
+        "                duplicate_models = TenantModelService.get_models_by_instance_id(candidate.id)\n"
+        "                model_ids_to_disable = [\n"
+        "                    duplicate.id for duplicate in duplicate_models\n"
+        "                    if duplicate.status != ActiveStatusEnum.INACTIVE.value\n"
+        "                ]\n"
+        "                status_changed = candidate.status != ActiveStatusEnum.INACTIVE.value or bool(model_ids_to_disable)\n"
+        "                if candidate.status != ActiveStatusEnum.INACTIVE.value:\n"
+        "                    TenantModelInstanceService.update_by_id(\n"
+        "                        candidate.id, {\"status\": ActiveStatusEnum.INACTIVE.value}\n"
+        "                    )\n"
+        "                if model_ids_to_disable:\n"
+        "                    TenantModelService.batch_update_model_status(\n"
+        "                        model_ids_to_disable, ActiveStatusEnum.INACTIVE.value\n"
+        "                    )\n"
+        "                if migrated or status_changed:\n"
+        "                    logging.info(\n"
+        "                        \"Retired duplicate bundled %s model instance %s for tenant %s; migrated references=%d\",\n"
+        "                        provider_name, candidate.instance_name, tenant_id, migrated,\n"
+        "                    )\n\n",
+        "environment-managed OCR provider creation only",
+    )
+    text = replace_once(
+        text,
+        "def ensure_paddleocr_from_env(tenant_id: str) -> str | None:\n"
+        "    return _ensure_ocr_provider_from_env(\n"
+        "        tenant_id,\n"
+        '        "PaddleOCR",\n'
+        '        "paddleocr-from-env",\n'
+        "        _collect_env_config(PADDLEOCR_ENV_KEYS, PADDLEOCR_DEFAULT_CONFIG),\n"
+        "    )\n",
+        "def ensure_paddleocr_from_env(tenant_id: str) -> str | None:\n"
+        "    # Model-list refresh calls this entry point. Provision both bundled\n"
+        "    # profiles as separate instances so normal OCR, VL, and user-created\n"
+        "    # remote endpoints never collapse into one profile.\n"
+        "    normal_model = _ensure_ocr_provider_from_env(\n"
+        "        tenant_id,\n"
+        '        "PaddleOCR",\n'
+        '        "paddleocr-from-env",\n'
+        "        _collect_env_config(PADDLEOCR_ENV_KEYS, PADDLEOCR_DEFAULT_CONFIG),\n"
+        "    )\n"
+        "    ensure_paddleocr_vl_from_env(tenant_id)\n"
+        "    return normal_model\n",
+        "separate bundled PaddleOCR profiles",
     )
     tenant_model_target.write_text(text, encoding="utf-8")
 
@@ -1610,6 +1967,17 @@ def main() -> None:
         'max_content_length = int(os.environ.get("MAX_CONTENT_LENGTH", "0"))\n'
         'app.config["MAX_CONTENT_LENGTH"] = max_content_length or None\n',
         "unlimited HTTP document upload support",
+    )
+    text = replace_once(
+        text,
+        '        except Exception as e_jwt:\n'
+        '            logging.warning(f"load_user from jwt got exception {e_jwt}")\n',
+        '        except Exception as e_jwt:\n'
+        '            if auth_token.count(".") == 2:\n'
+        '                logging.warning(f"load_user from jwt got exception {e_jwt}")\n'
+        '            else:\n'
+        '                logging.debug("Bearer credential is not a JWT; trying API token authentication")\n',
+        "quiet expected API-token authentication fallback",
     )
     api_app_target.write_text(text, encoding="utf-8")
 
@@ -1732,22 +2100,69 @@ def main() -> None:
     text = ocr_model_target.read_text(encoding="utf-8")
     text = replace_once(
         text,
-        "        def _resolve_config(key: str, env_key: str, default=\"\"):\n"
-        "            # lower-case keys (UI), upper-case PADDLEOCR_* (env auto-provision), env vars\n"
-        "            return config.get(key, config.get(env_key, os.environ.get(env_key, default)))\n",
-        '        env_managed = model_name in {"paddleocr-from-env", "paddleocr-vl-from-env"}\n'
-        '        vl_env_keys = {\n'
-        '            "PADDLEOCR_BASE_URL": "PADDLEOCR_VL_BASE_URL",\n'
-        '            "PADDLEOCR_ALGORITHM": "PADDLEOCR_VL_MODEL",\n'
-        '        } if model_name == "paddleocr-vl-from-env" else {}\n\n'
-        "        def _resolve_config(key: str, env_key: str, default=\"\"):\n"
-        "            # The bundled environment-managed provider follows the current\n"
-        "            # container secret even when an older value remains in the database.\n"
-        "            override_key = vl_env_keys.get(env_key, env_key)\n"
-        "            if env_managed and os.environ.get(override_key):\n"
-        "                return os.environ[override_key]\n"
-        "            return config.get(key, config.get(env_key, os.environ.get(env_key, default)))\n",
-        "environment-managed PaddleOCR credentials",
+        "        self.paddleocr_algorithm = _resolve_config(\"paddleocr_algorithm\", \"PADDLEOCR_ALGORITHM\", \"PaddleOCR-VL\")\n"
+        "        self.paddleocr_access_token = _resolve_config(\"paddleocr_access_token\", \"PADDLEOCR_ACCESS_TOKEN\", None)\n",
+        "        self.paddleocr_algorithm = _resolve_config(\"paddleocr_algorithm\", \"PADDLEOCR_ALGORITHM\", \"PaddleOCR-VL\")\n"
+        "        self.paddleocr_access_token = _resolve_config(\"paddleocr_access_token\", \"PADDLEOCR_ACCESS_TOKEN\", None)\n"
+        "        self.paddleocr_api_mode = _resolve_config(\"paddleocr_api_mode\", \"PADDLEOCR_API_MODE\", \"auto\")\n"
+        "        self.paddleocr_direct_workers = int(_resolve_config(\"paddleocr_direct_workers\", \"PADDLEOCR_DIRECT_WORKERS\", 8))\n"
+        "        self.paddleocr_direct_render_dpi = int(_resolve_config(\"paddleocr_direct_render_dpi\", \"PADDLEOCR_DIRECT_RENDER_DPI\", 144))\n",
+        "database-managed PaddleOCR execution settings",
+    )
+    text = replace_once(
+        text,
+        "            algorithm=self.paddleocr_algorithm,\n"
+        "        )\n",
+        "            algorithm=self.paddleocr_algorithm,\n"
+        "            api_mode=self.paddleocr_api_mode,\n"
+        "            direct_workers=self.paddleocr_direct_workers,\n"
+        "            direct_render_dpi=self.paddleocr_direct_render_dpi,\n"
+        "        )\n",
+        "PaddleOCR execution settings forwarding",
+    )
+    text = replace_once(
+        text,
+        "    def parse_pdf(self, filepath: str, binary=None, callback=None, parse_method: str = \"raw\", **kwargs):\n"
+        "        ok, reason = self.check_available()\n"
+        "        if not ok:\n"
+        "            raise RuntimeError(f\"PaddleOCR server not accessible: {reason}\")\n",
+        "    @staticmethod\n"
+        "    def _apply_dataset_overrides(kwargs: dict) -> dict:\n"
+        "        # Dataset settings are stored with paddleocr_* names, while the\n"
+        "        # parser accepts generic names. Translate them for every task so\n"
+        "        # all executor containers consume the shared DB value.\n"
+        "        resolved = dict(kwargs)\n"
+        "        for source, target in {\n"
+        "            \"paddleocr_api_url\": \"base_url\",\n"
+        "            \"paddleocr_base_url\": \"base_url\",\n"
+        "            \"paddleocr_access_token\": \"access_token\",\n"
+        "            \"paddleocr_algorithm\": \"algorithm\",\n"
+        "            \"paddleocr_api_mode\": \"api_mode\",\n"
+        "            \"paddleocr_direct_workers\": \"direct_workers\",\n"
+        "            \"paddleocr_direct_render_dpi\": \"direct_render_dpi\",\n"
+        "        }.items():\n"
+        "            if source in resolved and resolved[source] not in (None, \"\"):\n"
+        "                resolved[target] = resolved.pop(source)\n"
+        "        return resolved\n\n"
+        "    def parse_pdf(self, filepath: str, binary=None, callback=None, parse_method: str = \"raw\", **kwargs):\n"
+        "        kwargs = self._apply_dataset_overrides(kwargs)\n"
+        "        ok, reason = self.check_available()\n"
+        "        if not ok:\n"
+        "            raise RuntimeError(f\"PaddleOCR server not accessible: {reason}\")\n",
+        "dataset PaddleOCR override translation",
+    )
+    text = replace_once(
+        text,
+        "    def parse_image(self, filepath: str, binary=None, callback=None, **kwargs) -> str:\n"
+        "        ok, reason = self.check_available()\n"
+        "        if not ok:\n"
+        "            raise RuntimeError(f\"PaddleOCR server not accessible: {reason}\")\n",
+        "    def parse_image(self, filepath: str, binary=None, callback=None, **kwargs) -> str:\n"
+        "        kwargs = self._apply_dataset_overrides(kwargs)\n"
+        "        ok, reason = self.check_available()\n"
+        "        if not ok:\n"
+        "            raise RuntimeError(f\"PaddleOCR server not accessible: {reason}\")\n",
+        "dataset PaddleOCR image override translation",
     )
     ocr_model_target.write_text(text, encoding="utf-8")
 
@@ -1818,15 +2233,16 @@ def main() -> None:
         "api/db/services/document_service.py",
     )
     text = document_service_target.read_text(encoding="utf-8")
+    text = replace_once(text, "import logging\n", "import logging\nimport os\n", "document log limit environment import")
     text = replace_once(
         text,
         "from rag.nlp import search\n"
         "from rag.utils.redis_conn import REDIS_CONN\n",
         "from rag.nlp import search\n"
         "from rag.utils.redis_conn import REDIS_CONN\n\n"
-        "# MySQL TEXT holds 65535 bytes. Leave headroom so a multi-byte tail can never\n"
-        "# push the column over the limit and fail the whole write.\n"
-        "DOC_PROGRESS_MSG_MAX_BYTES = 60000\n\n\n"
+        "# The LIG schema migrates progress logs to LONGTEXT. Keep a configurable\n"
+        "# recent tail so the UI remains responsive without the old 64 KiB ceiling.\n"
+        'DOC_PROGRESS_MSG_MAX_BYTES = int(os.environ.get("DOC_PROGRESS_MSG_MAX_BYTES", "4194304"))\n\n\n'
         "def trim_tail_by_bytes(text: str, max_bytes: int) -> str:\n"
         '    """Keep the most recent whole lines of text that fit in max_bytes of UTF-8."""\n'
         '    encoded = text.encode("utf-8")\n'
@@ -1882,6 +2298,123 @@ def main() -> None:
         "document progress and log split write",
     )
     document_service_target.write_text(text, encoding="utf-8")
+
+    settings_target = checked_target(Path(sys.argv[29]), EXPECTED_SETTINGS_SHA256, "common/settings.py")
+    text = settings_target.read_text(encoding="utf-8")
+    text = replace_once(text, "from common.misc_utils import pip_install_torch\n", "", "settings torch helper import")
+    text = replace_once(
+        text,
+        "def check_and_install_torch():\n"
+        "    global PARALLEL_DEVICES\n"
+        "    try:\n"
+        "        pip_install_torch()\n"
+        "        import torch.cuda\n\n"
+        "        PARALLEL_DEVICES = torch.cuda.device_count()\n"
+        "        logging.info(f\"found {PARALLEL_DEVICES} gpus\")\n"
+        "    except Exception:\n"
+        "        logging.info(\"can't import package 'torch'\")\n",
+        "def check_and_install_torch():\n"
+        "    global PARALLEL_DEVICES\n"
+        "    from lig_runtime.gpu_detection import onnx_cuda_device_count\n\n"
+        "    PARALLEL_DEVICES = onnx_cuda_device_count()\n"
+        "    logging.info(\"found %s ONNX CUDA device(s)\", PARALLEL_DEVICES)\n",
+        "settings ONNX GPU detection",
+    )
+    settings_target.write_text(text, encoding="utf-8")
+
+    deepdoc_ocr_target = checked_target(Path(sys.argv[30]), EXPECTED_DEEPDOC_OCR_SHA256, "deepdoc/vision/ocr.py")
+    text = deepdoc_ocr_target.read_text(encoding="utf-8")
+    text = replace_once(text, "from common.misc_utils import pip_install_torch\n", "from lig_runtime.gpu_detection import onnx_cuda_available\n", "DeepDOC torch helper import")
+    text = replace_once(
+        text,
+        "    def cuda_is_available():\n"
+        "        try:\n"
+        "            pip_install_torch()\n"
+        "            import torch\n\n"
+        "            target_id = 0 if device_id is None else device_id\n"
+        "            if torch.cuda.is_available() and torch.cuda.device_count() > target_id:\n"
+        "                return True\n"
+        "        except Exception:\n"
+        "            return False\n"
+        "        return False\n",
+        "    def cuda_is_available():\n"
+        "        target_id = 0 if device_id is None else device_id\n"
+        "        return onnx_cuda_available(target_id)\n",
+        "DeepDOC ONNX GPU detection",
+    )
+    text = replace_once(
+        text,
+        '        gpu_mem_limit_mb = int(os.environ.get("OCR_GPU_MEM_LIMIT_MB", "2048"))\n'
+        '        arena_strategy = os.environ.get("OCR_ARENA_EXTEND_STRATEGY", "kNextPowerOfTwo")\n'
+        "        provider_device_id = 0 if device_id is None else device_id\n"
+        "        cuda_provider_options = {\n"
+        '            "device_id": provider_device_id,  # Use specific GPU\n'
+        '            "gpu_mem_limit": max(gpu_mem_limit_mb, 0) * 1024 * 1024,\n'
+        '            "arena_extend_strategy": arena_strategy,  # gpu memory allocation strategy\n'
+        "        }\n",
+        '        gpu_mem_limit_mb = int(os.environ.get("OCR_GPU_MEM_LIMIT_MB", "0"))\n'
+        '        arena_strategy = os.environ.get("OCR_ARENA_EXTEND_STRATEGY", "kNextPowerOfTwo")\n'
+        "        provider_device_id = 0 if device_id is None else device_id\n"
+        "        cuda_provider_options = {\n"
+        '            "device_id": provider_device_id,\n'
+        '            "arena_extend_strategy": arena_strategy,\n'
+        "        }\n"
+        "        if gpu_mem_limit_mb > 0:\n"
+        '            cuda_provider_options["gpu_mem_limit"] = gpu_mem_limit_mb * 1024 * 1024\n',
+        "optional DeepDOC GPU memory cap",
+    )
+    text = replace_once(
+        text,
+        "        logging.info(f\"load_model {model_file_path} uses GPU (device {provider_device_id}, gpu_mem_limit={cuda_provider_options['gpu_mem_limit']}, arena_strategy={arena_strategy})\")\n",
+        "        logging.info(f\"load_model {model_file_path} uses GPU (device {provider_device_id}, gpu_mem_limit={cuda_provider_options.get('gpu_mem_limit', 'unlimited')}, arena_strategy={arena_strategy})\")\n",
+        "DeepDOC optional GPU memory logging",
+    )
+    deepdoc_ocr_target.write_text(text, encoding="utf-8")
+
+    db_models_target = checked_target(Path(sys.argv[31]), EXPECTED_DB_MODELS_SHA256, "api/db/db_models.py")
+    text = db_models_target.read_text(encoding="utf-8")
+    text = text.replace(
+        '    progress_msg = TextField(null=True, help_text="process message", default="")\n',
+        '    progress_msg = LongTextField(null=True, help_text="process message", default="")\n',
+    )
+    if text.count('progress_msg = LongTextField(null=True, help_text="process message", default="")') != 3:
+        raise SystemExit("Expected Document, Task, and PipelineOperationLog progress_msg fields")
+    text = replace_once(
+        text,
+        '    alter_db_add_column(migrator, "task", "chunk_ids", LongTextField(null=True, help_text="chunk ids", default=""))\n',
+        '    alter_db_add_column(migrator, "task", "chunk_ids", LongTextField(null=True, help_text="chunk ids", default=""))\n'
+        '    alter_db_column_type(migrator, "document", "progress_msg", LongTextField(null=True, help_text="process message", default=""))\n'
+        '    alter_db_column_type(migrator, "task", "progress_msg", LongTextField(null=True, help_text="process message", default=""))\n'
+        '    alter_db_column_type(migrator, "pipeline_operation_log", "progress_msg", LongTextField(null=True, help_text="process message", default=""))\n',
+        "progress log LONGTEXT migration",
+    )
+    db_models_target.write_text(text, encoding="utf-8")
+
+    dataset_service_target = checked_target(Path(sys.argv[32]), EXPECTED_DATASET_API_SERVICE_SHA256, "api/apps/services/dataset_api_service.py")
+    text = dataset_service_target.read_text(encoding="utf-8")
+    text = replace_once(text, "from api.db.db_models import File\n", "from api.db.db_models import Document, File\n", "dataset Document import")
+    text = replace_once(
+        text,
+        '    if not KnowledgebaseService.update_by_id(kb.id, req):\n'
+        '        return False, "Update dataset error.(Database error)"\n\n'
+        '    ok, k = KnowledgebaseService.get_by_id(kb.id)\n',
+        '    if not KnowledgebaseService.update_by_id(kb.id, req):\n'
+        '        return False, "Update dataset error.(Database error)"\n\n'
+        '    # Documents own the parser configuration consumed by task executors.\n'
+        '    # Synchronize it in the shared database so every worker sees the UI save.\n'
+        '    document_update = {}\n'
+        '    if "parser_config" in req:\n'
+        '        document_update["parser_config"] = req["parser_config"]\n'
+        '    if "parser_id" in req and req["parser_id"]:\n'
+        '        document_update["parser_id"] = req["parser_id"]\n'
+        '    if "pipeline_id" in req:\n'
+        '        document_update["pipeline_id"] = req["pipeline_id"]\n'
+        '    if document_update:\n'
+        '        Document.update(document_update).where(Document.kb_id == kb.id).execute()\n\n'
+        '    ok, k = KnowledgebaseService.get_by_id(kb.id)\n',
+        "dataset parser configuration propagation",
+    )
+    dataset_service_target.write_text(text, encoding="utf-8")
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:

@@ -31,6 +31,10 @@ const expectedHashes = {
   'src/components/chunk-method-dialog/index.tsx': '0dec00d6c24a26a9594414668b4695b4a2a357767c2f3bd4f19a0a4b8c707463',
   'src/interfaces/database/document.ts': 'ab4093f0eedadc34063f100c27f362ff4cb4ba87a4be84c91ff973902ec85736',
   'src/interfaces/request/document.ts': '99cff0a70f4d815e6f7bcbae3711f81d7704b8f96bd8775c8e1f644aff345cc0',
+  'src/pages/dataset/process-log-modal.tsx': 'd140832272a8d204e8da8e70ec1f05949f901d3795ef3fda57a9000b01552cc6',
+  'src/hooks/use-knowledge-request.ts': '5a43702ec53f713e86f1f087ee638d2fd42c8acad0ae17cf1a881b6c41487fdc',
+  'src/pages/user-setting/setting-model/modal/provider-modal/field-config/provider-config-map.ts':
+    'abfef8b4daf93d05306c86ecb856eb49c2944ce25378fa539a691c32e5644f8e',
 };
 
 function sha256(path) {
@@ -79,6 +83,134 @@ content = replaceOnce(
   'light default theme',
 );
 write('src/app.tsx', content);
+
+content = read('src/pages/dataset/process-log-modal.tsx');
+content = replaceOnce(
+  content,
+  'bg-bg-card rounded-lg h-fit max-h-[350px] overflow-y-auto',
+  'bg-bg-card rounded-lg h-fit max-h-[65vh] overflow-y-auto',
+  'expanded process log viewport',
+);
+write('src/pages/dataset/process-log-modal.tsx', content);
+
+content = read('src/hooks/use-knowledge-request.ts');
+content = replaceOnce(
+  content,
+  `          queryClient.invalidateQueries({
+            queryKey: [KnowledgeApiAction.FetchKnowledgeListByPage],
+          });
+        } else {
+          queryClient.invalidateQueries({ queryKey: ['fetchKnowledgeDetail'] });`,
+  `          await queryClient.invalidateQueries({
+            queryKey: [KnowledgeApiAction.FetchKnowledgeListByPage],
+          });
+        } else {
+          await queryClient.invalidateQueries({
+            queryKey: ['fetchKnowledgeDetail'],
+          });`,
+  'await dataset configuration refresh after save',
+);
+content = replaceOnce(
+  content,
+  `      if (data.code === 0) {
+        message.success(i18n.t(\`message.updated\`));
+        if (shouldFetchList) {`,
+  `      if (data.code === 0) {
+        if (shouldFetchList) {`,
+  'delay dataset saved message until refresh',
+);
+content = replaceOnce(
+  content,
+  `          await queryClient.invalidateQueries({
+            queryKey: ['fetchKnowledgeDetail'],
+          });
+        }
+      }
+      return data;`,
+  `          await queryClient.invalidateQueries({
+            queryKey: ['fetchKnowledgeDetail'],
+          });
+        }
+        message.success(i18n.t(\`message.updated\`));
+      }
+      return data;`,
+  'show dataset saved message after refresh',
+);
+write('src/hooks/use-knowledge-request.ts', content);
+
+content = read(
+  'src/pages/user-setting/setting-model/modal/provider-modal/field-config/provider-config-map.ts',
+);
+const paddleProviderStart = content.indexOf('  // ============ PaddleOCR ============');
+const paddleProviderEnd = content.indexOf(
+  '  // ============ MinerU ============',
+  paddleProviderStart,
+);
+if (paddleProviderStart < 0 || paddleProviderEnd < 0) {
+  throw new Error('PaddleOCR provider configuration block was not found');
+}
+let paddleProvider = content.slice(paddleProviderStart, paddleProviderEnd);
+paddleProvider = replaceOnce(
+  paddleProvider,
+  `      },
+    ],
+    verifyTransform:`,
+  `      },
+      {
+        name: 'paddleocr_api_mode',
+        label: 'paddleocrApiMode',
+        type: FormFieldType.Select,
+        required: false,
+        defaultValue: 'auto',
+        options: [
+          { label: 'Auto', value: 'auto' },
+          { label: 'RAGFlow Job API', value: 'job' },
+          { label: 'PaddleX Image API', value: 'direct-image' },
+        ],
+      },
+      {
+        name: 'paddleocr_direct_workers',
+        label: 'paddleocrDirectWorkers',
+        type: FormFieldType.Number,
+        required: false,
+        defaultValue: 8,
+        validation: { min: 1, message: 'paddleocrDirectWorkersMessage' },
+      },
+      {
+        name: 'paddleocr_direct_render_dpi',
+        label: 'paddleocrDirectRenderDpi',
+        type: FormFieldType.Number,
+        required: false,
+        defaultValue: 144,
+        validation: { min: 1, message: 'paddleocrDirectRenderDpiMessage' },
+      },
+    ],
+    verifyTransform:`,
+  'PaddleOCR provider execution fields',
+);
+const algorithmTransform = `      if (values.paddleocr_algorithm)
+        cfg.paddleocr_algorithm = values.paddleocr_algorithm;`;
+if (paddleProvider.split(algorithmTransform).length - 1 !== 2) {
+  throw new Error('Expected PaddleOCR verify and submit transforms');
+}
+paddleProvider = paddleProvider.replaceAll(
+  algorithmTransform,
+  `${algorithmTransform}
+      if (values.paddleocr_api_mode)
+        cfg.paddleocr_api_mode = values.paddleocr_api_mode;
+      if (values.paddleocr_direct_workers)
+        cfg.paddleocr_direct_workers = Number(values.paddleocr_direct_workers);
+      if (values.paddleocr_direct_render_dpi)
+        cfg.paddleocr_direct_render_dpi = Number(values.paddleocr_direct_render_dpi);`,
+);
+content =
+  content.slice(0, paddleProviderStart) +
+  paddleProvider +
+  content.slice(paddleProviderEnd);
+write(
+  'src/pages/user-setting/setting-model/modal/provider-modal/field-config/provider-config-map.ts',
+  content,
+);
 
 content = read('index.html');
 content = replaceOnce(
@@ -572,6 +704,11 @@ for (const [localePath, values] of [
     keep: 'Leave blank to keep the saved password',
     update: 'Save a new password here, then run the document again. The password is never returned by the API.',
     clear: 'Remove the saved document password',
+    paddleApiMode: 'PaddleOCR API mode',
+    paddleWorkers: 'Concurrent image requests',
+    paddleWorkersMessage: 'Enter at least 1 concurrent image request',
+    paddleDpi: 'PDF image resolution (DPI)',
+    paddleDpiMessage: 'Enter a positive PDF image resolution',
   }],
   ['src/locales/ko.ts', {
     label: '문서 비밀번호',
@@ -581,6 +718,11 @@ for (const [localePath, values] of [
     keep: '비워 두면 저장된 비밀번호를 유지합니다',
     update: '새 비밀번호를 저장한 뒤 문서를 다시 실행하세요. 비밀번호는 API 응답에 노출되지 않습니다.',
     clear: '저장된 문서 비밀번호 제거',
+    paddleApiMode: 'PaddleOCR API 방식',
+    paddleWorkers: '이미지 API 동시 요청',
+    paddleWorkersMessage: '이미지 API 동시 요청 수를 1 이상 입력하세요',
+    paddleDpi: 'PDF 이미지 해상도(DPI)',
+    paddleDpiMessage: 'PDF 이미지 해상도를 1 이상 입력하세요',
   }],
 ]) {
   content = read(localePath);
@@ -590,6 +732,17 @@ for (const [localePath, values] of [
     "      parseOnCreation: " + (localePath.endsWith('/ko.ts') ? "'생성 시 파싱'," : "'Parse on creation',") +
       `\n      documentPasswords: '${values.label}',\n      documentPasswordsTip: '${values.tip}',\n      documentPassword: '${values.password}',\n      documentPasswordPlaceholder: '${values.placeholder}',\n      documentPasswordKeepPlaceholder: '${values.keep}',\n      documentPasswordUpdateTip: '${values.update}',\n      documentPasswordClear: '${values.clear}',`,
     `document password ${localePath} locale`,
+  );
+  content = replaceOnce(
+    content,
+    localePath.endsWith('/ko.ts')
+      ? "      paddleocrAlgorithmMessage: 'PaddleOCR 알고리즘을 선택해 주세요',"
+      : "      paddleocrAlgorithmMessage: 'Please select a PaddleOCR algorithm',",
+    (localePath.endsWith('/ko.ts')
+      ? "      paddleocrAlgorithmMessage: 'PaddleOCR 알고리즘을 선택해 주세요',"
+      : "      paddleocrAlgorithmMessage: 'Please select a PaddleOCR algorithm',") +
+      `\n      paddleocrApiMode: '${values.paddleApiMode}',\n      paddleocrDirectWorkers: '${values.paddleWorkers}',\n      paddleocrDirectWorkersMessage: '${values.paddleWorkersMessage}',\n      paddleocrDirectRenderDpi: '${values.paddleDpi}',\n      paddleocrDirectRenderDpiMessage: '${values.paddleDpiMessage}',`,
+    `PaddleOCR execution ${localePath} locale`,
   );
   write(localePath, content);
 }

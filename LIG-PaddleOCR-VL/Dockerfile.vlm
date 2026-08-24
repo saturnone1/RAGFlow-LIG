@@ -1,0 +1,6 @@
+ARG BASE_IMAGE=ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-vllm-server:latest-nvidia-gpu-offline
+FROM ${BASE_IMAGE}
+
+USER root
+COPY run_vlm.py /opt/lig-paddleocr-vl/run_vlm.py
+ENTRYPOINT ["python3", "/opt/lig-paddleocr-vl/run_vlm.py"]

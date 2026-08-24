@@ -29,6 +29,6 @@ EXPOSE 8080
 USER app
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=5 \
-    CMD curl --fail --silent --show-error http://127.0.0.1:8080/healthz || exit 1
+    CMD ["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/healthz"]
 
 ENTRYPOINT ["dotnet", "LigRagFlowMcp.dll"]

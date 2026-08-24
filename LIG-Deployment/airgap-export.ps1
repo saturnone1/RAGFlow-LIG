@@ -97,7 +97,6 @@ $bundleFiles = @(
     @{ Source = (Join-Path $upstreamDockerDirectory ".env"); Target = "RAGFlow\docker\.env" },
     @{ Source = (Join-Path $upstreamDockerDirectory "docker-compose.yml"); Target = "RAGFlow\docker\docker-compose.yml" },
     @{ Source = (Join-Path $upstreamDockerDirectory "docker-compose-base.yml"); Target = "RAGFlow\docker\docker-compose-base.yml" },
-    @{ Source = (Join-Path $upstreamDockerDirectory "entrypoint.sh"); Target = "RAGFlow\docker\entrypoint.sh" },
     @{ Source = (Join-Path $upstreamDockerDirectory "service_conf.yaml.template"); Target = "RAGFlow\docker\service_conf.yaml.template" },
     @{ Source = (Join-Path $upstreamDockerDirectory "infinity_conf.toml"); Target = "RAGFlow\docker\infinity_conf.toml" },
     @{ Source = (Join-Path $upstreamDockerDirectory "init.sql"); Target = "RAGFlow\docker\init.sql" }
@@ -115,9 +114,9 @@ foreach ($bundleFile in $bundleFiles) {
 }
 
 $images = @(
-    "lig/ragflow-ui:v0.26.4-3",
+    "lig/ragflow-ui:v0.26.4-4",
     "lig/ragflow-mcp:v0.26.4-3",
-    "lig/paddleocr-ko:v0.26.4-3",
+    "lig/paddleocr-ko:v0.26.4-4",
     "infiniflow/ragflow:v0.26.4",
     "infiniflow/infinity:v0.7.0",
     "mysql:8.0.39",
@@ -125,7 +124,7 @@ $images = @(
     "valkey/valkey:8"
 )
 if ($IncludeGpu) {
-    $images += @("lig/ragflow-ui-gpu:v0.26.4-3", "lig/paddleocr-ko-gpu:v0.26.4-3")
+    $images += "lig/ragflow-ui-gpu:v0.26.4-4"
 }
 foreach ($image in $images) {
     $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
@@ -153,7 +152,7 @@ if ($ExistingImageArchive) {
         throw "The existing archive must have a sibling manifest.json: $existingManifestPath"
     }
     $existingManifest = Get-Content -LiteralPath $existingManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($existingManifest.bundleFormat -ne 9) {
+    if ($existingManifest.bundleFormat -ne 12) {
         throw "Existing image archive uses unsupported bundle format: $($existingManifest.bundleFormat)"
     }
     $expectedImages = @($images | Sort-Object)
@@ -257,7 +256,7 @@ if ($IncludePaddleOcrVl) {
     }
     $paddleOcrVlImages = @(
         $configuration["PADDLEOCR_VL_API_IMAGE"],
-        $configuration["PADDLEOCR_VL_VLM_IMAGE"],
+        $configuration["PADDLEOCR_VL_VLM_RUNTIME_IMAGE"],
         $configuration["PADDLEOCR_VL_GATEWAY_IMAGE"]
     )
     foreach ($image in $paddleOcrVlImages) {
@@ -296,14 +295,13 @@ $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Ob
     [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = Get-Sha256Hex $_.FullName }
 }
 $manifest = [pscustomobject]@{
-    bundleFormat = 9
+    bundleFormat = 12
     ragflowVersion = "v0.26.4"
-    uiImage = "lig/ragflow-ui:v0.26.4-3"
+    uiImage = "lig/ragflow-ui:v0.26.4-4"
     gpuIncluded = [bool]$IncludeGpu
-    gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-3" } else { $null }
+    gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-4" } else { $null }
     mcpImage = "lig/ragflow-mcp:v0.26.4-3"
-    ocrImage = "lig/paddleocr-ko:v0.26.4-3"
-    gpuOcrImage = if ($IncludeGpu) { "lig/paddleocr-ko-gpu:v0.26.4-3" } else { $null }
+    ocrImage = "lig/paddleocr-ko:v0.26.4-4"
     images = @($images)
     imageIds = $imageIds
     embeddingImages = @($embeddingImages)
@@ -314,6 +312,8 @@ $manifest = [pscustomobject]@{
     embeddingRuntime = if ($IncludeEmbedding) { "TEI cpu-1.9" } else { $null }
     paddleOcrVlIncluded = [bool]$IncludePaddleOcrVl
     paddleOcrVlModel = if ($IncludePaddleOcrVl) { "PaddleOCR-VL-1.6" } else { $null }
+    paddleOcrVlPipelineImage = if ($IncludePaddleOcrVl) { "lig/paddleocr-vl-pipeline-cpu:1.6-1" } else { $null }
+    paddleOcrVlPipelineDevice = if ($IncludePaddleOcrVl) { "cpu" } else { $null }
     paddleOcrVlImages = @($paddleOcrVlImages)
     paddleOcrVlImageIds = $paddleOcrVlImageIds
     createdAt = (Get-Date).ToString("o")

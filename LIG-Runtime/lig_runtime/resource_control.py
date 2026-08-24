@@ -43,6 +43,15 @@ def available_memory_bytes() -> int:
 def adaptive_pdf_task_page_size(configured_max: int) -> int:
     """Choose a non-rejecting PDF task size from current memory and parser concurrency."""
     configured_max = max(1, int(configured_max))
+    adaptive_enabled = os.environ.get("ADAPTIVE_PDF_TASK_PAGE_SIZE", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not adaptive_enabled:
+        logging.info("PDF task page size %s (fixed; adaptive sizing disabled)", configured_max)
+        return configured_max
     workers = max(1, int(os.environ.get("TASK_EXECUTOR_WORKERS", "1")))
     task_concurrency = max(1, int(os.environ.get("MAX_CONCURRENT_TASKS", "1")))
     chunk_concurrency = max(1, int(os.environ.get("MAX_CONCURRENT_CHUNK_BUILDERS", "1")))

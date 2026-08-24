@@ -52,16 +52,16 @@ $manifestPath = Join-Path $sourcePath "manifest.json"
 foreach ($file in @($imageArchive, $manifestPath)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required archive not found: $file" } }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 9) {
+if ($manifest.bundleFormat -ne 12) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
-if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-3") {
+if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-4") {
     throw "Unsupported or missing UI image in manifest: $($manifest.uiImage)"
 }
 if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-3") {
     throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
 }
-if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-3") {
+if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-4") {
     throw "Unsupported or missing Korean OCR image in manifest: $($manifest.ocrImage)"
 }
 foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
@@ -69,9 +69,8 @@ foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.oc
 }
 if ($Device -eq "gpu") {
     if (-not $manifest.gpuIncluded) { throw "This bundle does not include GPU images. Export it again with -IncludeGpu." }
-    if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-3") { throw "Unsupported GPU UI image: $($manifest.gpuUiImage)" }
-    if ($manifest.gpuOcrImage -ne "lig/paddleocr-ko-gpu:v0.26.4-3") { throw "Unsupported GPU OCR image: $($manifest.gpuOcrImage)" }
-    foreach ($requiredImage in @($manifest.gpuUiImage, $manifest.gpuOcrImage)) {
+    if ($manifest.gpuUiImage -ne "lig/ragflow-ui-gpu:v0.26.4-4") { throw "Unsupported GPU UI image: $($manifest.gpuUiImage)" }
+    foreach ($requiredImage in @($manifest.gpuUiImage)) {
         if ($requiredImage -notin @($manifest.images)) { throw "Required GPU image is absent from manifest images: $requiredImage" }
     }
 }
@@ -99,7 +98,7 @@ foreach ($loadedImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrI
     if ($inspect.ExitCode -ne 0) { throw "Required image was not loaded: $loadedImage" }
 }
 if ($manifest.gpuIncluded) {
-    foreach ($loadedImage in @($manifest.gpuUiImage, $manifest.gpuOcrImage)) {
+    foreach ($loadedImage in @($manifest.gpuUiImage)) {
         $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $loadedImage) -AllowFailure
         if ($inspect.ExitCode -ne 0) { throw "Required GPU image was not loaded: $loadedImage" }
     }
@@ -139,11 +138,7 @@ if ($Device -eq "gpu") {
     } catch {
         throw "The GPU is visible, but DeepDoc could not create a CUDA ONNX session. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }
-    try {
-        Invoke-Docker @("run", "--rm", "--gpus", "all", "--entrypoint", "/ragflow/.venv/bin/python", $manifest.gpuOcrImage, "-c", "from pathlib import Path; import ctypes, rapidocr; ctypes.CDLL('libcublasLt.so.12'); import onnxruntime as ort; model=Path(rapidocr.__file__).resolve().parent/'models'/'korean_PP-OCRv5_rec_mobile.onnx'; session=ort.InferenceSession(str(model), providers=['CUDAExecutionProvider']); providers=session.get_providers(); assert providers and providers[0] == 'CUDAExecutionProvider', f'PaddleOCR CUDA provider unavailable: {providers}'; print('PaddleOCR ONNX provider:', providers[0])")
-    } catch {
-        throw "The GPU is visible, but the PaddleOCR image cannot use CUDAExecutionProvider. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
-    }
+    Write-Host "DeepDOC CUDA 검증을 통과했습니다. 일반 PP-OCRv5는 GPU 설치에서도 CPU 서비스를 사용합니다."
 }
 
 $secretFile = Join-Path $PSScriptRoot ".env.secret"

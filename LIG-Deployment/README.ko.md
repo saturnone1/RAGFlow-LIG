@@ -6,13 +6,13 @@
 
 - 문서 엔진: Elasticsearch 대신 Infinity
 - 실행 장치: 로컬 기본 CPU, 에어갭 번들은 NVIDIA DeepDoc GPU 설치도 지원
-- GPU 런타임: CPU 이미지와 분리한 CUDA 12.8·cuDNN 9 전용 RAGFlow/PaddleOCR 이미지
-- 한국어 OCR: CPU/GPU 프로필에 `korean_PP-OCRv5_mobile_rec` 모델을 포함한 내부 PaddleOCR 서비스 자동 실행
+- GPU 런타임: DeepDOC용 CUDA 12.8·cuDNN 9 RAGFlow 이미지와 선택형 PaddleOCR-VL VLM
+- 한국어 OCR: CPU·GPU 설치 모두 `korean_PP-OCRv5_mobile_rec` 모델을 포함한 CPU PaddleOCR 서비스 자동 실행
 - 내부 서비스: RAGFlow, 한국어 PaddleOCR, LIG 관리 MCP, Infinity, MySQL, MinIO, Valkey
 - 온라인 임베딩 선택지: NVIDIA 공개 API의 `nvidia/llama-nemotron-embed-vl-1b-v2`
 - 선택 설치 임베딩: TEI CPU 기반 `Qwen/Qwen3-Embedding-0.6B`(1024차원, 모델과 런타임을 별도 에어갭 아카이브에 포함)
 - 제외: Kibana, Sandbox, 별도 Docling 서비스
-- 포트: 모두 `127.0.0.1`에만 공개
+- 네트워크: 웹 UI·REST API·공식 MCP·LIG 관리 MCP만 `0.0.0.0`에 공개하고 DB·Redis·MinIO·Infinity·OCR 상태 포트는 `127.0.0.1` 유지
 - 포트 블록: 다른 로컬 MCP 서버와 분리한 `42300`~`42318`
 - 웹 UI: `http://127.0.0.1:42300`
 - REST API: `http://127.0.0.1:42301`
@@ -58,7 +58,6 @@ PowerShell에서 다음 명령을 사용합니다.
 ```powershell
 cd LIG-Deployment
 Copy-Item .env.secret.example .env.secret
-# .env.secret의 RAGFLOW_MCP_API_KEY를 RAGFlow UI에서 만든 키로 교체
 .\lig-ragflow.ps1 config
 .\lig-ragflow.ps1 pull
 .\lig-ragflow.ps1 build
@@ -66,7 +65,7 @@ Copy-Item .env.secret.example .env.secret
 .\lig-ragflow.ps1 start
 ```
 
-`verify-cpu-images.ps1`은 별도 테스트 패키지를 설치하지 않고 빌드된 이미지 안에서 암호 PDF의 실제 본문 보존, 일반 문서의 잔존 암호 제거, 청킹 방식 변경 시 봉인 암호 승계, OCR/청킹 런타임 패치 포함, 한국어 PP-OCRv5 모델 메타데이터와 대형 페이지 축소 계산, MCP .NET 런타임을 검사합니다.
+`config`는 공식 MCP가 내부 RAGFlow API 호출에 사용할 서버측 키를 생성합니다. 최초 사용자가 만들어지면 이 키를 첫 활성 테넌트에 자동 등록하므로 공식 MCP 클라이언트에는 Bearer 헤더를 넣지 않습니다. `verify-cpu-images.ps1`은 별도 테스트 패키지를 설치하지 않고 빌드된 이미지 안에서 암호 PDF의 실제 본문 보존, 일반 문서의 잔존 암호 제거, 청킹 방식 변경 시 봉인 암호 승계, OCR/청킹 런타임 패치 포함, 한국어 PP-OCRv5 모델 메타데이터와 대형 페이지 축소 계산, MCP .NET 런타임을 검사합니다.
 
 NVIDIA GPU 실행 이미지는 CPU 이미지 위에 고정된 CUDA 12.8·cuDNN 9 라이브러리를 추가합니다. GPU 장비 또는 CPU/GPU 에어갭 번들을 만들 PC에서는 기본 빌드 후 다음 명령도 실행합니다.
 
@@ -120,7 +119,7 @@ RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Ba
 
 upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 LIG 기본 프로파일에는 포함하지 않으며, task executor 프로세스가 RAGFlow 이미지 안의 DeepDoc 모듈을 직접 호출합니다. `DEEPDOC_URL`을 사용한 독립 서비스 운영을 검증하지 않은 상태에서 `deepdoc` 프로파일만 켜도 ingestion이 자동 분리되지는 않습니다.
 
-한국어 스캔 PDF에는 별도 `paddleocr-cpu` 또는 `paddleocr-gpu` 서비스가 자동 실행됩니다. 이 서비스는 한국어·영어·숫자를 지원하는 PP-OCRv5 한국어 모델을 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. RAGFlow는 PDF를 데이터셋의 `task_page_size` 또는 전역 `PDF_TASK_PAGE_SIZE` 단위로 나누고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE` 상한을 추가 적용합니다. 각 작업은 해당 페이지만 새 PDF로 구성해 OCR 서비스에 전송하므로 전체 원본을 작업마다 반복 처리하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되며 데이터셋 화면에서 별도로 입력하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
+한국어 스캔 PDF에는 CPU·GPU 설치 모두 동일한 `paddleocr-cpu` 서비스가 자동 실행됩니다. 일반 PP-OCRv5가 GPU 메모리를 점유하지 않으므로 선택형 PaddleOCR-VL VLM과 동시에 사용할 때 VRAM 경합이 줄어듭니다. 한국어·영어·숫자를 지원하는 모델은 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. RAGFlow는 PDF를 데이터셋의 `task_page_size` 또는 전역 `PDF_TASK_PAGE_SIZE` 단위로 나누고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE` 상한을 추가 적용합니다. 각 작업은 해당 페이지만 새 PDF로 구성해 OCR 서비스에 전송하므로 전체 원본을 작업마다 반복 처리하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
 
 **파일 열기 암호**를 설정한 PDF, Word(`.docx`/`.doc`), Excel(`.xlsx`/`.xls`), PowerPoint(`.pptx`/`.ppt`) 및 HWPX는 업로드 창에서 파일별 비밀번호를 입력할 수 있습니다. 업로드 단계에서 암호를 검증한 뒤 원본 암호화 문서는 그대로 저장하고, 비밀번호는 `.env.secret`의 `LIG_DOCUMENT_PASSWORD_KEY`로 AES-256-GCM 암호화해 문서 설정에 보관합니다. 작업자는 파싱 직전에 메모리에서 문서를 복호화해 기존 파서로 전달합니다. HWPX는 한컴의 AES-256-CBC/PBKDF2 형식을 복호화하고 XML 본문을 텍스트로 변환하며, 일반 HWP 5와 HWPX도 텍스트 문서로 처리합니다. 잘못된 암호는 업로드 오류로 바로 표시되며, 문서의 청킹 방식 설정에서 새 암호를 저장하고 재실행할 수도 있습니다.
 
@@ -134,7 +133,7 @@ DeepDOC는 삭제하지 않습니다. DeepDOC는 OCR뿐 아니라 레이아웃, 
 
 ### 선택 설치: PaddleOCR-VL-1.6
 
-최신 복합 문서 파서인 `PaddleOCR-VL-1.6`도 기존 PaddleOCR과 함께 사용할 수 있습니다. 공식 오프라인 NVIDIA GPU pipeline 이미지와 vLLM 이미지, LIG 비동기 호환 게이트웨이의 세 컨테이너로 실행합니다. 공식 이미지의 표시 용량은 각각 약 10 GB와 15 GB이므로 기본 배포 용량을 늘리지 않도록 선택 설치로 분리했습니다.
+최신 복합 문서 파서인 `PaddleOCR-VL-1.6`도 기존 PaddleOCR과 함께 사용할 수 있습니다. 공식 오프라인 pipeline 이미지의 모델 자산을 보존하면서 GPU PaddlePaddle만 동일 버전 CPU 런타임으로 교체한 LIG pipeline 이미지, 공식 vLLM 이미지, LIG 비동기 호환 게이트웨이의 세 컨테이너로 실행합니다. 원본 이미지의 표시 용량이 각각 약 10 GB와 15 GB이므로 기본 배포 용량을 늘리지 않도록 선택 설치로 분리했습니다.
 
 ```powershell
 pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-pull
@@ -143,7 +142,7 @@ pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-start
 pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-test
 ```
 
-RAGFlow 데이터셋 설정에서 기존 PaddleOCR와 같은 방식으로 PDF 파서를 선택한 다음 모델을 `paddleocr-vl-from-env`로 지정합니다. 일반 한국어 OCR은 `paddleocr-from-env`, 복잡한 표·수식·차트·레이아웃과 다국어 문서는 `paddleocr-vl-from-env`를 우선 시험하십시오. 두 모델 모두 `PDF_TASK_PAGE_SIZE`와 데이터셋 `task_page_size`를 따르며 작업 제출·진행 조회·취소·결과 수집 방식도 같습니다.
+RAGFlow의 **데이터셋 설정 → PDF 파서**에서 `PaddleOCR`를 고르면 모델 목록에 `paddleocr-from-env`와 `paddleocr-vl-from-env`가 각각 표시됩니다. 일반 한국어 OCR은 `paddleocr-from-env`, 복잡한 표·수식·차트·레이아웃과 다국어 문서는 `paddleocr-vl-from-env`를 선택하십시오. 둘은 RAGFlow가 지원하는 같은 `PaddleOCR` 공급자 엔진을 사용하지만 모델 인스턴스, 내부 URL, Bearer 토큰과 알고리즘은 서로 분리되어 있습니다. 설정 화면에서 공급자를 수동으로 다시 추가할 필요가 없습니다. 기존 설치는 컨테이너를 새 이미지로 재생성한 뒤 최대 30초 안에 누락된 VL 인스턴스를 자동 생성합니다.
 
 상태 확인과 중지는 다음과 같습니다.
 
@@ -152,7 +151,9 @@ pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-status
 pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-stop
 ```
 
-`PADDLEOCR_VL_JOB_WORKERS`, `PADDLEOCR_VL_MAX_PENDING_JOBS`, `PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS`는 `.env.lig`에서 변경합니다. 공식 구성은 NVIDIA GPU와 CUDA 12.6 이상 드라이버 환경을 대상으로 하며 pipeline API와 VLM 서버가 같은 GPU를 사용합니다.
+`paddleocr-vl-start`는 시작 전에 GPU 이름·총 VRAM·사용/여유 VRAM을 출력하고 NVIDIA 컨테이너 접근이 안 되면 즉시 중단합니다. 모델 목록을 열 때 VL gateway의 `/health`를 확인해 정상일 때만 `paddleocr-vl-from-env`를 활성화하며, `paddleocr-vl-stop` 또는 기동 실패 상태에서는 자동으로 비활성화합니다. 따라서 실행되지 않는 VL 모델을 선택해 문서 처리 단계에서 뒤늦게 실패하지 않습니다. `paddleocr-vl-status`는 세 서비스 상태, 현재 VLM 설정, VRAM 사용량과 최근 KV cache/OOM 오류를 보여줍니다. `paddleocr-vl-test`는 VLM, CPU pipeline, gateway를 순서대로 검사해 실패 계층을 구분합니다. `config`는 CPU/GPU 프로필의 일반 PP-OCRv5 장치, VL pipeline CPU, VL VLM GPU와 Infinity 무상한 구성을 자동 검증합니다.
+
+12 GiB GPU용 VL 기본값은 일반 PP-OCRv5와 레이아웃 파이프라인을 CPU에서 실행하고 0.9B VLM만 GPU에서 실행합니다. DeepDOC도 GPU를 사용하므로 두 GPU 경로를 동시에 처리하면 VRAM 경합이 생길 수 있습니다. 공식 이미지의 vLLM 기본값 대신 `gpu-memory-utilization=0.60`, eager 모드, API server 1개, 최대 batch tokens 16,384를 적용해 `No available memory for the cache blocks` 기동 실패와 불필요한 CUDA graph/대형 배치 예약을 줄입니다. `PADDLEOCR_VL_GPU_MEMORY_UTILIZATION`이 너무 낮으면 cache block을 만들 수 없고 너무 높으면 DeepDOC가 사용할 VRAM이 줄어듭니다. `paddleocr-vl-status`는 현재 VRAM과 최근 KV cache/OOM 오류를 함께 표시합니다.
 
 API와 문서 작업기는 별도 컨테이너로 실행됩니다. 문서 작업기가 재시작되어도 웹/API와 데이터베이스가 함께 내려가지 않으며, 동일 작업에는 Redis lease를 사용해 중복 OCR을 막습니다. CPU/PaddleOCR 기본값은 worker 3개와 worker당 task/parser 슬롯 1개이므로 페이지 범위 작업을 총 3개까지 병렬 처리합니다. `TASK_EXECUTOR_WORKERS=3`, `MAX_CONCURRENT_TASKS=3`, `MAX_CONCURRENT_CHUNK_BUILDERS=3`으로 모두 올리면 총 3개가 아니라 최대 9개 파서가 열리므로 그렇게 설정하지 마십시오. worker마다 파서 모델 메모리가 중복됩니다.
 
@@ -162,12 +163,23 @@ API와 문서 작업기는 별도 컨테이너로 실행됩니다. 문서 작업
 TASK_EXECUTOR_WORKERS=3
 MAX_CONCURRENT_TASKS=1
 MAX_CONCURRENT_CHUNK_BUILDERS=1
-PDF_TASK_PAGE_SIZE=12
+PDF_TASK_PAGE_SIZE=40
+ADAPTIVE_PDF_TASK_PAGE_SIZE=false
 ```
 
-문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로의 공급자 요청 제한시간은 300초이고 embedding batch는 4입니다. 요청 단위 조정이며 자원 상한은 아닙니다. 설정 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`가 값을 검증합니다. 초기 병목 판단 순서는 다음과 같습니다.
+문서 bulk와 thread pool은 RAGFlow upstream 기본값을 사용합니다. 로컬 Qwen3 CPU 경로의 공급자 요청 제한시간은 300초이고 embedding batch는 4입니다. 요청 단위 조정이며 자원 상한은 아닙니다. `.env.lig` 변경은 `stop` 후 `start`로 반영되며, `config`와 `start`가 값을 검증합니다. 데이터셋 화면에서 저장한 파서와 OCR 모델 설정은 공유 DB의 데이터셋 및 기존 문서 설정에 즉시 함께 기록되어 모든 task executor가 같은 값을 읽습니다. 대기 중인 작업과 이후 재실행은 새 값을 사용하며, 이미 파싱 중인 작업은 중간에 URL이나 파서를 바꾸어 결과가 섞이지 않도록 시작 시점 설정을 끝까지 유지합니다. 환경변수는 누락된 로컬 모델을 최초 생성할 때만 쓰며 이후 UI에서 저장한 URL·토큰·알고리즘·API 방식을 덮어쓰지 않습니다. 저장 성공 표시는 최신 데이터셋 상세정보를 다시 받은 뒤 나타납니다. 진행 로그 필드는 LONGTEXT로 확장되어 기본적으로 문서별 최근 4 MiB, task별 최근 256 KiB를 표시합니다.
 
-내부 PaddleOCR의 문서 크기와 페이지 수는 기본적으로 제한하지 않습니다. RAGFlow는 DeepDOC, Plain Text, Docling을 비롯해 페이지 분할이 가능한 모든 PDF 파서를 기본 `PDF_TASK_PAGE_SIZE=12`에 따라 12쪽 작업으로 나눕니다. 데이터셋의 `task_page_size`가 있으면 전역값보다 우선하며, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE`가 전송 상한으로 추가 적용됩니다. `One`, 지식 그래프 및 목차 추출처럼 전체 문서 문맥이 필요한 모드는 페이지를 분할하지 않습니다. 메모리가 부족하면 현재 가용 메모리와 `worker 수 × min(worker당 task 슬롯, worker당 parser 슬롯)`에 맞춰 작업 페이지 수를 1쪽까지 자동 축소합니다. OCR 서비스도 페이지를 한 장씩 렌더링하고 메모리가 부족하면 회수될 때까지 대기합니다. 큰 페이지는 현재 메모리 예산에 맞게 축소하고, OCR 큐가 차면 거부하지 않고 순서를 기다립니다. `MAX_CONTENT_LENGTH`, `LIG_DOCUMENT_MAX_BYTES`, `PADDLEOCR_MAX_UPLOAD_BYTES`, `PADDLEOCR_MAX_PDF_PAGES`의 `0`은 무제한입니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 정리하지 않습니다. 내부 Bearer 토큰과 문서 암호화 키는 최초 실행 때 생성해 `%LOCALAPPDATA%\LIG-RAGFlow\.env.secret`에도 보존하므로 새 번들 폴더로 교체해도 기존 DB의 저장 암호를 계속 해제할 수 있습니다.
+사내 원격 PaddleX/PaddleOCR 서빙 주소를 직접 등록할 때는 `API 방식`을 사용합니다. `자동`은 번들 내부 `paddleocr`/`paddleocr-vl` 주소에는 RAGFlow Job API를, 그 밖의 주소에는 페이지 이미지를 Base64 JSON으로 보내는 PaddleX API를 선택합니다. 주소 형태가 자동 판별과 다르면 `RAGFlow Job API` 또는 `PaddleX Image API`로 명시하십시오. 이미지 API 동시 요청 수와 PDF 렌더링 DPI는 데이터셋 설정과 모델 공급자 설정에서 변경할 수 있으며, DPI는 번들 Job API에도 같은 작업 단위로 전달됩니다. 기본 144 DPI는 MIL-STD-2525C의 본문·기호표·혼합 페이지를 144/180/216/240/300 DPI로 비교했을 때 평균 단어 F1이 가장 높고 300 DPI 대비 픽셀량이 약 23%여서 선택했습니다. 아주 작은 글자의 검출량이 부족한 스캔 문서만 216 DPI를 먼저 시험하십시오.
+
+`diagnostics`의 `PaddleOcrEffectiveMaxDirectRequests`는 `task executor 수 × worker당 실제 parser 슬롯 × 페이지 동시 요청 수`로 계산한 원격 OCR의 실효 최대 동시 요청입니다. 기본값은 `3 × 1 × 8 = 24`입니다. 자원 상한을 강제하지 않으며, 원격 서버 처리량에 맞게 프로파일별 `이미지 API 동시 요청` 값을 조정하는 판단 자료로 사용합니다.
+
+모델 공급자 화면의 PaddleOCR 프로파일은 서로 독립된 인스턴스입니다. `paddleocr-from-env`는 일반 PP-OCRv5, `paddleocr-vl-from-env`는 PaddleOCR-VL이며 사용자가 추가한 사내 원격 프로파일은 입력한 인스턴스 이름으로 별도 보존됩니다. 모델 목록을 열 때 두 번들 프로파일을 각각 관리하고, URL·토큰·알고리즘을 인스턴스 ID 기준으로 조회하므로 첫 번째 PaddleOCR 모델이 임의로 선택되지 않습니다. 과거 자동 생성된 `paddleocr-from-env(숫자)` 중 URL과 알고리즘이 정식 프로파일과 같은 항목은 데이터셋·문서 참조를 정식 이름으로 트랜잭션 마이그레이션한 뒤 비활성화합니다. 이미 비활성화된 항목에는 반복 UPDATE를 하지 않습니다. 데이터셋에서 특정 프로파일을 선택하면 그 전체 모델 식별자가 작업에 저장됩니다.
+
+PaddleX의 `/ocr`와 `/layout-parsing` endpoint는 PDF 파일 자체가 아니라 이미지 입력을 받습니다. `PaddleX Image API` 경로는 PDF를 기본 144 DPI로 렌더링하고 `이미지 API 동시 요청` 수만큼만 메모리에 올려 페이지 순서를 유지한 채 결과를 합칩니다. PDF 헤더 앞에 불필요한 바이트가 붙은 파일도 첫 1,024바이트와 pypdf 판별을 통해 PDF로 처리합니다. 따라서 원격 PaddleX에서 PDF가 거부되는 문제를 단순 재시도가 아니라 입력 형식 변환으로 해결합니다.
+
+Infinity에는 컨테이너 CPU·메모리 상한을 두지 않습니다. `config`가 최종 Compose 결과에 상한이 남아 있으면 시작 전에 실패합니다. LIG 런타임은 문자열 Bash 명령이나 `eval` 없이 Python/실행 파일 인자 배열로 서비스를 시작합니다. 초기 병목 판단 순서는 다음과 같습니다.
+
+내부 PaddleOCR의 문서 크기와 페이지 수는 기본적으로 제한하지 않습니다. RAGFlow는 DeepDOC, Plain Text, Docling을 비롯해 페이지 분할이 가능한 모든 PDF 파서를 기본 `PDF_TASK_PAGE_SIZE=40`에 따라 40쪽 작업으로 나눕니다. 데이터셋의 `task_page_size`가 있으면 전역값보다 우선하며, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE=40` 전송 상한이 추가 적용됩니다. `One`, 지식 그래프 및 목차 추출처럼 전체 문서 문맥이 필요한 모드는 페이지를 분할하지 않습니다. 기본 `ADAPTIVE_PDF_TASK_PAGE_SIZE=false`이므로 시스템 RAM에 따라 40쪽이 더 작게 바뀌지 않습니다. 메모리 적응 축소가 필요한 장비에서만 이를 `true`로 변경하십시오. OCR 서비스는 페이지를 한 장씩 렌더링하며 큰 페이지는 현재 메모리 예산에 맞게 축소하고, OCR 큐가 차면 거부하지 않고 순서를 기다립니다. `MAX_CONTENT_LENGTH`, `LIG_DOCUMENT_MAX_BYTES`, `PADDLEOCR_MAX_UPLOAD_BYTES`, `PADDLEOCR_MAX_PDF_PAGES`의 `0`은 무제한입니다. 완료·실패 결과만 TTL 후 삭제하고 실행 중 작업은 정리하지 않습니다. 일반 PaddleOCR 토큰, VL 토큰, 공식 MCP 서버 키와 문서 암호화 키는 최초 실행 때 각각 생성해 `%LOCALAPPDATA%\LIG-RAGFlow\.env.secret`에도 보존합니다.
 
 1. `diagnostics`의 task executor heartbeat 수가 설정값과 일치하는지 확인합니다.
 2. UI의 문서 처리 상세에서 현재 단계와 실제 `process_duration`을 확인합니다.
@@ -243,7 +255,7 @@ NVIDIA GPU 장비에는 다음 설치 스크립트를 사용합니다. CUDA 접�
 
 ## MCP 범위
 
-RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://127.0.0.1:42303/mcp`와 LIG 관리 MCP `http://127.0.0.1:42306/mcp`를 RAGFlow와 함께 시작합니다. 관리 MCP는 데이터셋·문서와 나머지 `/api/v1` 운영 기능을 제공하며, 요청에는 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 Bearer 키로 사용합니다.
+RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://<RAG-PC-IP>:42303/mcp`와 LIG 관리 MCP `http://<RAG-PC-IP>:42306/mcp`를 RAGFlow와 함께 시작합니다. 공식 MCP는 `self-host` 모드이며 서버가 내부 API 키를 보관하므로 MCP 클라이언트에는 Authorization/Bearer 헤더를 설정하지 않습니다. 최초 사용자 생성 직후 자동등록이 끝날 때까지 최대 30초 정도 기다린 다음 연결하십시오. 관리 MCP는 데이터셋·문서와 나머지 `/api/v1` 운영 기능을 제공하며, 쓰기 기능 때문에 기존처럼 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 Bearer 키로 사용합니다.
 
 `9382`는 RAGFlow 컨테이너 내부 MCP 포트이며 이 배포의 Windows 호스트 접속 포트가 아닙니다. REST API는 `http://127.0.0.1:42301/api/v1/...`에 호출합니다. `42300`은 웹 UI이므로 `http://127.0.0.1:42300/api/v1/chat` 같은 호출은 404가 정상이며, RAGFlow에는 범용 `/api/v1/chat` 단일 엔드포인트가 없습니다. MCP 클라이언트에는 REST API 주소가 아니라 위 `/mcp` 주소를 등록하십시오.
 

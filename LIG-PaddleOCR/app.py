@@ -28,12 +28,15 @@ DEVICE = os.getenv("PADDLEOCR_DEVICE", "cpu").strip().lower()
 if DEVICE not in {"cpu", "gpu"}:
     raise RuntimeError("PADDLEOCR_DEVICE must be cpu or gpu")
 
+AVAILABLE_PROVIDERS = ort.get_available_providers()
 if DEVICE == "gpu":
-    available_providers = ort.get_available_providers()
-    if "CUDAExecutionProvider" not in available_providers:
+    from lig_runtime.gpu_detection import nvidia_device_ids
+
+    gpu_ids = nvidia_device_ids()
+    if "CUDAExecutionProvider" not in AVAILABLE_PROVIDERS or not gpu_ids:
         raise RuntimeError(
-            "PADDLEOCR_DEVICE=gpu requires ONNX Runtime CUDAExecutionProvider; "
-            f"available providers: {available_providers}"
+            "PADDLEOCR_DEVICE=gpu requires CUDAExecutionProvider and an NVIDIA "
+            f"device; providers={AVAILABLE_PROVIDERS}, gpuIds={gpu_ids}"
         )
 
 MODEL_DIRECTORY = Path(__import__("rapidocr").__file__).resolve().parent / "models"
@@ -69,20 +72,17 @@ OCR_SESSION_PROVIDERS = {
     name: component.session.session.get_providers()
     for name, component in (("detector", OCR.text_det), ("recognizer", OCR.text_rec))
 }
-if DEVICE == "gpu":
-    invalid_sessions = {
-        name: providers
-        for name, providers in OCR_SESSION_PROVIDERS.items()
-        if not providers or providers[0] != "CUDAExecutionProvider"
-    }
-    if invalid_sessions:
-        raise RuntimeError(
-            "PADDLEOCR_DEVICE=gpu could not create CUDA-backed OCR sessions; "
-            f"actual providers: {invalid_sessions}"
-        )
-RENDER_SCALE = float(os.getenv("PADDLEOCR_RENDER_SCALE", "2.0"))
-if RENDER_SCALE <= 0:
-    raise RuntimeError("PADDLEOCR_RENDER_SCALE must be positive")
+required_provider = "CUDAExecutionProvider" if DEVICE == "gpu" else "CPUExecutionProvider"
+invalid_sessions = {
+    name: providers
+    for name, providers in OCR_SESSION_PROVIDERS.items()
+    if not providers or providers[0] != required_provider
+}
+if invalid_sessions:
+    raise RuntimeError(f"PaddleOCR must use {required_provider}: {invalid_sessions}")
+DEFAULT_RENDER_DPI = int(os.getenv("PADDLEOCR_RENDER_DPI", "144"))
+if DEFAULT_RENDER_DPI < 1:
+    raise RuntimeError("PADDLEOCR_RENDER_DPI must be a positive integer")
 
 JOB_TTL_SECONDS = int(os.getenv("PADDLEOCR_JOB_TTL_SECONDS", "3600"))
 JOB_WORKERS = int(os.getenv("PADDLEOCR_JOB_WORKERS", "1"))
@@ -167,13 +167,22 @@ def _provision_ragflow_tenants() -> None:
     """Register environment-backed OCR models for existing and new tenants."""
     while not provisioner_stop.is_set():
         try:
-            from api.db.db_models import Tenant
+            from api.db.db_models import APIToken, Tenant
             from api.db.joint_services.tenant_model_service import (
                 ensure_paddleocr_from_env,
                 ensure_paddleocr_vl_from_env,
             )
 
-            tenant_ids = [row.id for row in Tenant.select(Tenant.id).where(Tenant.status == "1")]
+            tenant_ids = [
+                row.id
+                for row in Tenant.select(Tenant.id)
+                .where(Tenant.status == "1")
+                .order_by(Tenant.create_time, Tenant.id)
+            ]
+            mcp_api_key = os.getenv("RAGFLOW_MCP_HOST_API_KEY", "").strip()
+            if tenant_ids and mcp_api_key and not APIToken.select().where(APIToken.token == mcp_api_key).exists():
+                APIToken.create(tenant_id=tenant_ids[0], token=mcp_api_key)
+                app.logger.info("Provisioned the server-side official MCP API key for the primary tenant")
             for tenant_id in tenant_ids:
                 for attempt in range(2):
                     try:
@@ -289,10 +298,18 @@ def _page_pixel_budget(available_memory: int | None = None) -> int:
     return max(1, min(MAX_PAGE_PIXELS, adaptive_budget))
 
 
-def _pdf_render_scale(width: float, height: float, available_memory: int | None = None) -> float:
+def _pdf_render_scale(
+    width: float,
+    height: float,
+    render_dpi: int,
+    available_memory: int | None = None,
+) -> float:
     if width <= 0 or height <= 0:
         raise OcrResourceLimitError("PDF page dimensions must be positive")
-    return min(RENDER_SCALE, (_page_pixel_budget(available_memory) / (width * height)) ** 0.5)
+    if render_dpi < 1:
+        raise OcrResourceLimitError("PDF render DPI must be a positive integer")
+    requested_scale = render_dpi / 72.0
+    return min(requested_scale, (_page_pixel_budget(available_memory) / (width * height)) ** 0.5)
 
 
 def _fit_image_to_memory(image: Image.Image, available_memory: int) -> Image.Image:
@@ -333,6 +350,7 @@ def _write_page_result(output, page: dict[str, Any]) -> None:
 def _process_document(
     source_path: Path,
     result_path: Path,
+    render_dpi: int = DEFAULT_RENDER_DPI,
     progress=None,
     cancel_event: threading.Event | None = None,
 ) -> int:
@@ -349,7 +367,7 @@ def _process_document(
                         _raise_if_canceled(cancel_event)
                         available = _wait_for_memory(cancel_event)
                         width, height = page.get_size()
-                        image = page.render(scale=_pdf_render_scale(width, height, available)).to_pil()
+                        image = page.render(scale=_pdf_render_scale(width, height, render_dpi, available)).to_pil()
                         try:
                             _raise_if_canceled(cancel_event)
                             _write_page_result(output, _ocr_image(image, available))
@@ -377,7 +395,7 @@ def _process_document(
     return page_count
 
 
-def _run_job(job_id: str, source_path: Path, result_path: Path) -> None:
+def _run_job(job_id: str, source_path: Path, result_path: Path, render_dpi: int) -> None:
     with jobs_lock:
         job = jobs.get(job_id)
         if job is None:
@@ -398,7 +416,7 @@ def _run_job(job_id: str, source_path: Path, result_path: Path) -> None:
                 job.update(processed_pages=page_count, updated_at=time.time())
 
     try:
-        page_count = _process_document(source_path, result_path, update_progress, cancel_event)
+        page_count = _process_document(source_path, result_path, render_dpi, update_progress, cancel_event)
         with jobs_lock:
             job = jobs.get(job_id)
             if job is not None:
@@ -447,6 +465,7 @@ async def health():
         model="korean_PP-OCRv5_mobile_rec",
         activeJobs=active_jobs,
         maxPendingJobs=MAX_PENDING_JOBS,
+        defaultRenderDpi=DEFAULT_RENDER_DPI,
     )
 
 
@@ -460,9 +479,16 @@ async def create_job():
     if upload is None:
         return jsonify(error="file is required"), 400
 
-    model = (await request.form).get("model", "PP-OCRv5")
+    form = await request.form
+    model = form.get("model", "PP-OCRv5")
     if model != "PP-OCRv5":
         return jsonify(error="this service supports PP-OCRv5 only"), 400
+    try:
+        render_dpi = int(form.get("renderDpi", str(DEFAULT_RENDER_DPI)))
+        if render_dpi < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify(error="renderDpi must be a positive integer"), 400
 
     _cleanup_jobs()
     job_id = uuid.uuid4().hex
@@ -481,6 +507,7 @@ async def create_job():
                     "source_path": str(source_path),
                     "result_path": str(result_path),
                     "cancel_event": threading.Event(),
+                    "render_dpi": render_dpi,
                 }
                 break
         await asyncio.sleep(MEMORY_POLL_SECONDS)
@@ -520,7 +547,7 @@ async def create_job():
                 return jsonify(error="OCR job reservation was lost"), 503
             job.update(state="queued", source_size=source_size, updated_at=time.time())
 
-        future = executor.submit(_run_job, job_id, source_path, result_path)
+        future = executor.submit(_run_job, job_id, source_path, result_path, render_dpi)
         scheduled = True
         with jobs_lock:
             job = jobs.get(job_id)
@@ -554,7 +581,10 @@ async def get_job(job_id: str):
     if not job:
         return jsonify(error="job not found"), 404
 
-    payload: dict[str, Any] = {"state": job["state"]}
+    payload: dict[str, Any] = {
+        "state": job["state"],
+        "renderDpi": job.get("render_dpi", DEFAULT_RENDER_DPI),
+    }
     if job["state"] == "done":
         payload.update(
             resultJsonUrl=(
