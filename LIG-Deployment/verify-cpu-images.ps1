@@ -1,6 +1,6 @@
 param(
     [string]$RagFlowImage = "lig/ragflow-ui:v0.26.4-4",
-    [string]$PaddleOcrImage = "lig/paddleocr-ko:v0.26.4-4",
+    [string]$PaddleOcrImage = "",
     [string]$McpImage = "lig/ragflow-mcp:v0.26.4-3"
 )
 
@@ -37,7 +37,7 @@ function Invoke-ContainerPython([string]$Image, [string]$Program, [string[]]$Env
     Invoke-Docker $arguments
 }
 
-foreach ($image in @($RagFlowImage, $PaddleOcrImage, $McpImage)) {
+foreach ($image in @($RagFlowImage, $PaddleOcrImage, $McpImage) | Where-Object { $_ }) {
     Invoke-Docker @("image", "inspect", "--format", "{{.Id}}", $image)
 }
 
@@ -252,9 +252,11 @@ assert scale < 1.0
 assert app.MAX_PAGE_PIXELS * 2 * scale * scale <= app.MAX_PAGE_PIXELS + 1
 print("PaddleOCR Korean model and PDF pixel-scaling checks passed.")
 '@
-Invoke-ContainerPython -Image $PaddleOcrImage -Program $ocrProgram -Environment @(
-    "PADDLEOCR_INTERNAL_TOKEN=build-verification-token"
-)
+if ($PaddleOcrImage) {
+    Invoke-ContainerPython -Image $PaddleOcrImage -Program $ocrProgram -Environment @(
+        "PADDLEOCR_INTERNAL_TOKEN=build-verification-token"
+    )
+}
 
 Invoke-Docker @("run", "--rm", "--entrypoint", "dotnet", $McpImage, "--list-runtimes")
 Write-Host "CPU image verification passed."

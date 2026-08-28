@@ -2,7 +2,7 @@
 
 이 폴더만 폐쇄망 Windows PC로 복사하면 됩니다. 인터넷 연결이나 원본 Git 저장소는 필요하지 않습니다.
 
-현재 manifest 형식은 `bundleFormat=12`입니다. CPU·GPU 설치가 일반 PaddleOCR CPU 이미지를 공용으로 사용하고 선택형 PaddleOCR-VL VLM만 GPU를 사용하도록 이미지 구성이 정리되었으므로 이전 형식의 이미지 압축파일은 재사용할 수 없습니다. 폐쇄망 반입 전 새 번들을 생성하십시오.
+현재 manifest 형식은 `bundleFormat=13`입니다. 기본 런타임에서 임베딩 모델과 모든 OCR 이미지를 분리했으므로 이전 형식의 이미지 압축파일은 재사용할 수 없습니다. 폐쇄망 반입 전 새 번들을 생성하십시오.
 
 상세 설치, API 키, 포트, 내부 vLLM 생성/embedding 모델 등록, 운영 및 백업 절차는 `INSTALL-AND-CONFIGURATION.ko.md`를 먼저 읽으십시오.
 
@@ -21,20 +21,29 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 # CPU DeepDoc
 .\install.ps1
 
-# NVIDIA GPU DeepDOC + CPU PaddleOCR
+# NVIDIA GPU DeepDOC
 .\install-gpu.ps1
 ```
 
-사내 embedding endpoint가 없을 때만 기본 설치 완료 후 선택형 CPU 임베딩을 추가합니다.
+기본 설치에는 임베딩 모델과 OCR 이미지가 없습니다. 필요한 기능만 기본 설치 후 독립 추가 패키지로 설치합니다.
 
 ```powershell
+# 사내 embedding endpoint가 없을 때만
 .\install-embedding-cpu.ps1
 .\test-embedding.ps1
+
+# 한국어 스캔 문서 OCR이 필요할 때만
+.\install-paddleocr.ps1
+.\test-paddleocr.ps1
+
+# 복합 문서용 PaddleOCR-VL이 필요할 때만
+.\install-paddleocr-vl.ps1
+.\test-paddleocr-vl.ps1
 ```
 
-설치 스크립트는 모든 파일의 SHA-256과 Docker 이미지 ID를 검증하고 이미지를 불러온 뒤 `verify-cpu-images.ps1`의 문서 암호·OCR·청킹 기능 검증까지 통과해야 서비스를 시작합니다. 설치 PC에서는 `http://127.0.0.1:42300`, 같은 사내망에서는 `http://<RAG-PC-IP>:42300`으로 접속합니다. 공식 MCP `42303`은 클라이언트 Bearer 없이 연결하고, LIG 관리 MCP `42306`은 서버 `.env.secret` 키를 사용합니다.
+각 설치 스크립트는 자신이 사용하는 아카이브의 SHA-256과 Docker 이미지 ID를 검증한 뒤 이미지를 불러옵니다. 기본 설치는 `verify-cpu-images.ps1`로 RAGFlow 문서 암호·OCR 연동·청킹 런타임을 검사하고, 일반 PaddleOCR 추가 설치는 한국어 모델이 들어 있는 독립 이미지를 따로 검사합니다. 설치 PC에서는 `http://127.0.0.1:42300`, 같은 사내망에서는 `http://<RAG-PC-IP>:42300`으로 접속합니다. 공식 MCP `42303`은 클라이언트 Bearer 없이 연결하고, LIG 관리 MCP `42306`은 서버 `.env.secret` 키를 사용합니다.
 
-반입된 CPU 이미지에 문서 암호·OCR·청킹 수정과 한국어 모델이 실제 포함됐는지는 다음 명령으로 별도 검증할 수 있습니다.
+반입된 기본 RAGFlow 이미지에 문서 암호·OCR 연동·청킹 수정이 실제 포함됐는지는 다음 명령으로 별도 검증할 수 있습니다. 한국어 OCR 모델 검증은 `install-paddleocr.ps1` 또는 `test-paddleocr.ps1`에서 수행합니다.
 
 ```powershell
 .\verify-cpu-images.ps1
@@ -95,13 +104,13 @@ RAGFlow 컨테이너 안에서 접근 가능한 주소여야 하며, 모델명�
 - `lig/ragflow-ui:v0.26.4-4` 커스텀 UI 이미지
 - `lig/ragflow-ui-gpu:v0.26.4-4` CUDA 12.8·cuDNN 9 커스텀 UI 이미지(`-IncludeGpu` 번들만)
 - `lig/ragflow-mcp:v0.26.4-3` LIG 관리 MCP 이미지
-- `lig/paddleocr-ko:v0.26.4-4` 한국어 PP-OCRv5 CPU 이미지
+- `lig/paddleocr-ko:v0.26.4-4` 한국어 PP-OCRv5 CPU 이미지(`-IncludePaddleOcr` 추가 패키지만)
 - `lig/qwen3-embedding-tei:0.6b-1` Qwen3 0.6B 모델 내장 TEI CPU 이미지(`-IncludeEmbedding` 번들만)
 - `lig/qwen3-embedding-adapter:0.6b-1` RAGFlow 질의 instruction 어댑터(`-IncludeEmbedding` 번들만)
 - 공식 자산 기반 `lig/paddleocr-vl-pipeline-cpu:1.6-1`, 공식 vLLM 오프라인 이미지와 `lig/paddleocr-vl-gateway:1.6-1`(`-IncludePaddleOcrVl` 번들만)
 - `infiniflow/ragflow:v0.26.4` 롤백 이미지
 - Infinity, MySQL, MinIO, Valkey 이미지
 - 고정 버전 Compose 런타임 파일
-- 기본 런타임, 선택형 임베딩 및 선택형 PaddleOCR-VL을 분리한 gzip Docker 이미지 아카이브와 SHA-256 manifest
+- 기본 런타임, 선택형 임베딩, 일반 PaddleOCR, PaddleOCR-VL을 각각 분리한 gzip Docker 이미지 아카이브와 SHA-256 manifest
 
-Qwen3 임베딩 이미지와 모델은 내보낼 때 `-IncludeEmbedding`으로 만든 번들에만 포함되며 기본 설치에서는 로드하거나 실행하지 않습니다. 아카이브가 포함되어 있고 사내 embedding endpoint가 없을 때 `install-embedding-cpu.ps1`로 선택 설치합니다. 생성 LLM은 별도로 준비해야 합니다.
+Qwen3 임베딩은 `-IncludeEmbedding`, 일반 PaddleOCR은 `-IncludePaddleOcr`, PaddleOCR-VL은 `-IncludePaddleOcrVl`을 지정할 때만 각 추가 아카이브에 포함됩니다. 같은 폴더에 있어도 기본 설치에서는 로드하거나 실행하지 않습니다. 필요한 추가 설치 스크립트만 실행하십시오. 생성 LLM은 별도로 준비해야 합니다.

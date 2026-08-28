@@ -27,7 +27,7 @@ foreach ($path in @($manifestPath, $archivePath)) {
 }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 12) { throw "지원하지 않는 에어갭 번들 형식입니다: $($manifest.bundleFormat)" }
+if ($manifest.bundleFormat -ne 13) { throw "지원하지 않는 에어갭 번들 형식입니다: $($manifest.bundleFormat)" }
 if (-not $manifest.paddleOcrVlIncluded -or $manifest.paddleOcrVlModel -ne "PaddleOCR-VL-1.6") {
     throw "이 번들에는 PaddleOCR-VL-1.6 선택 이미지가 없습니다."
 }

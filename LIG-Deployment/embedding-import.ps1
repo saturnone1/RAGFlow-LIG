@@ -51,7 +51,7 @@ foreach ($path in @($manifestPath, $archivePath)) {
 }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 12) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
+if ($manifest.bundleFormat -ne 13) { throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)" }
 if (-not $manifest.embeddingIncluded) { throw "This bundle does not include the optional embedding archive." }
 if ($manifest.embeddingModel -ne "Qwen/Qwen3-Embedding-0.6B") { throw "Unsupported embedding model: $($manifest.embeddingModel)" }
 

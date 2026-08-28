@@ -52,7 +52,7 @@ $manifestPath = Join-Path $sourcePath "manifest.json"
 foreach ($file in @($imageArchive, $manifestPath)) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required archive not found: $file" } }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($manifest.bundleFormat -ne 12) {
+if ($manifest.bundleFormat -ne 13) {
     throw "Unsupported air-gap bundle format: $($manifest.bundleFormat)"
 }
 if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-4") {
@@ -61,10 +61,7 @@ if ($manifest.uiImage -ne "lig/ragflow-ui:v0.26.4-4") {
 if ($manifest.mcpImage -ne "lig/ragflow-mcp:v0.26.4-3") {
     throw "Unsupported or missing management MCP image in manifest: $($manifest.mcpImage)"
 }
-if ($manifest.ocrImage -ne "lig/paddleocr-ko:v0.26.4-4") {
-    throw "Unsupported or missing Korean OCR image in manifest: $($manifest.ocrImage)"
-}
-foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
+foreach ($requiredImage in @($manifest.uiImage, $manifest.mcpImage)) {
     if ($requiredImage -notin @($manifest.images)) { throw "Required image is absent from manifest images: $requiredImage" }
 }
 if ($Device -eq "gpu") {
@@ -93,7 +90,7 @@ $composeVersion = Invoke-DockerCapture -Arguments @("compose", "version", "--sho
 if ($composeVersion.ExitCode -ne 0) { throw "Docker Compose v2 is not available." }
 
 Invoke-Docker @("load", "--input", $imageArchive)
-foreach ($loadedImage in @($manifest.uiImage, $manifest.mcpImage, $manifest.ocrImage)) {
+foreach ($loadedImage in @($manifest.uiImage, $manifest.mcpImage)) {
     $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $loadedImage) -AllowFailure
     if ($inspect.ExitCode -ne 0) { throw "Required image was not loaded: $loadedImage" }
 }
@@ -123,7 +120,6 @@ if (-not (Test-Path -LiteralPath $verificationScript -PathType Leaf)) {
 }
 & $verificationScript `
     -RagFlowImage $manifest.uiImage `
-    -PaddleOcrImage $manifest.ocrImage `
     -McpImage $manifest.mcpImage
 
 if ($Device -eq "gpu") {

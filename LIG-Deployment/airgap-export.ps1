@@ -4,6 +4,7 @@ param(
     [string]$ExistingImageArchive,
     [switch]$IncludeGpu,
     [switch]$IncludeEmbedding,
+    [switch]$IncludePaddleOcr,
     [switch]$IncludePaddleOcrVl
 )
 
@@ -68,6 +69,7 @@ $bundleFiles = @(
     @{ Source = (Join-Path $bundleTemplateDirectory "install.ps1"); Target = "install.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "install-gpu.ps1"); Target = "install-gpu.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "install-embedding-cpu.ps1"); Target = "install-embedding-cpu.ps1" },
+    @{ Source = (Join-Path $bundleTemplateDirectory "install-paddleocr.ps1"); Target = "install-paddleocr.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "install-paddleocr-vl.ps1"); Target = "install-paddleocr-vl.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "start.ps1"); Target = "start.ps1" },
     @{ Source = (Join-Path $bundleTemplateDirectory "start-gpu.ps1"); Target = "start-gpu.ps1" },
@@ -94,6 +96,7 @@ $bundleFiles = @(
     @{ Source = (Join-Path $deploymentDirectory "DOCUMENT-COMPATIBILITY.ko.md"); Target = "DOCUMENT-COMPATIBILITY.ko.md" },
     @{ Source = (Join-Path $deploymentDirectory "airgap-import.ps1"); Target = "LIG-Deployment\airgap-import.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "embedding-import.ps1"); Target = "LIG-Deployment\embedding-import.ps1" },
+    @{ Source = (Join-Path $deploymentDirectory "paddleocr-import.ps1"); Target = "LIG-Deployment\paddleocr-import.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "paddleocr-vl-import.ps1"); Target = "LIG-Deployment\paddleocr-vl-import.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "lig-ragflow.ps1"); Target = "LIG-Deployment\lig-ragflow.ps1" },
     @{ Source = (Join-Path $deploymentDirectory "rotate-document-password-key.ps1"); Target = "LIG-Deployment\rotate-document-password-key.ps1" },
@@ -124,7 +127,6 @@ foreach ($bundleFile in $bundleFiles) {
 $images = @(
     "lig/ragflow-ui:v0.26.4-4",
     "lig/ragflow-mcp:v0.26.4-3",
-    "lig/paddleocr-ko:v0.26.4-4",
     "infiniflow/ragflow:v0.26.4",
     "infiniflow/infinity:v0.7.0",
     "mysql:8.0.39",
@@ -160,7 +162,7 @@ if ($ExistingImageArchive) {
         throw "The existing archive must have a sibling manifest.json: $existingManifestPath"
     }
     $existingManifest = Get-Content -LiteralPath $existingManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($existingManifest.bundleFormat -ne 12) {
+    if ($existingManifest.bundleFormat -ne 13) {
         throw "Existing image archive uses unsupported bundle format: $($existingManifest.bundleFormat)"
     }
     $expectedImages = @($images | Sort-Object)
@@ -218,6 +220,37 @@ else {
     if ($null -ne $compressionError) {
         if (Test-Path -LiteralPath $imageArchive) { Remove-Item -LiteralPath $imageArchive -Force }
         throw $compressionError
+    }
+}
+
+$paddleOcrImages = @()
+$paddleOcrImageIds = [ordered]@{}
+if ($IncludePaddleOcr) {
+    $paddleOcrImages = @("lig/paddleocr-ko:v0.26.4-4")
+    foreach ($image in $paddleOcrImages) {
+        $inspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $image) -AllowFailure
+        if ($inspect.ExitCode -ne 0) { throw "Requested optional PaddleOCR image is missing: $image" }
+        $paddleOcrImageIds[$image] = ([string]($inspect.Lines | Where-Object { $_ -match '^sha256:[0-9a-fA-F]{64}$' } | Select-Object -Last 1)).Trim()
+        if (-not $paddleOcrImageIds[$image]) { throw "Could not resolve optional PaddleOCR image ID: $image" }
+    }
+    $ocrTar = Join-Path $destinationPath "lig-paddleocr-images-v0.26.4.tar"
+    $ocrArchive = Join-Path $destinationPath "lig-paddleocr-images-v0.26.4.tar.gz"
+    Invoke-Docker (@("save", "--output", $ocrTar) + $paddleOcrImages)
+    Write-Host "Compressing optional PaddleOCR image archive with gzip..."
+    $ocrInput = $null
+    $ocrOutput = $null
+    $ocrGzip = $null
+    try {
+        $ocrInput = [IO.File]::OpenRead($ocrTar)
+        $ocrOutput = [IO.File]::Create($ocrArchive)
+        $ocrGzip = [IO.Compression.GZipStream]::new($ocrOutput, [IO.Compression.CompressionLevel]::Optimal, $false)
+        $ocrInput.CopyTo($ocrGzip, 1MB)
+    }
+    finally {
+        if ($null -ne $ocrGzip) { $ocrGzip.Dispose() }
+        if ($null -ne $ocrOutput) { $ocrOutput.Dispose() }
+        if ($null -ne $ocrInput) { $ocrInput.Dispose() }
+        if (Test-Path -LiteralPath $ocrTar) { Remove-Item -LiteralPath $ocrTar -Force }
     }
 }
 
@@ -303,15 +336,18 @@ $records = Get-ChildItem -LiteralPath $destinationPath -File -Recurse | Where-Ob
     [pscustomobject]@{ file = $relativePath; bytes = $_.Length; sha256 = Get-Sha256Hex $_.FullName }
 }
 $manifest = [pscustomobject]@{
-    bundleFormat = 12
+    bundleFormat = 13
     ragflowVersion = "v0.26.4"
     uiImage = "lig/ragflow-ui:v0.26.4-4"
     gpuIncluded = [bool]$IncludeGpu
     gpuUiImage = if ($IncludeGpu) { "lig/ragflow-ui-gpu:v0.26.4-4" } else { $null }
     mcpImage = "lig/ragflow-mcp:v0.26.4-3"
-    ocrImage = "lig/paddleocr-ko:v0.26.4-4"
+    ocrImage = if ($IncludePaddleOcr) { "lig/paddleocr-ko:v0.26.4-4" } else { $null }
     images = @($images)
     imageIds = $imageIds
+    paddleOcrIncluded = [bool]$IncludePaddleOcr
+    paddleOcrImages = @($paddleOcrImages)
+    paddleOcrImageIds = $paddleOcrImageIds
     embeddingImages = @($embeddingImages)
     embeddingImageIds = $embeddingImageIds
     embeddingIncluded = [bool]$IncludeEmbedding

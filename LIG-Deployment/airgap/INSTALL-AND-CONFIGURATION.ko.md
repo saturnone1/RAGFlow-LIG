@@ -36,14 +36,14 @@ cd D:\LIG-RAGFlow-Airgap-20260728
 설치 프로그램은 다음 작업을 자동 수행합니다.
 
 1. manifest와 모든 파일의 SHA-256 검증
-2. CPU Docker 이미지와 번들 생성 시 선택한 GPU 이미지가 포함된 gzip 아카이브 로드
+2. RAGFlow 기본 Docker 이미지와 번들 생성 시 선택한 DeepDOC GPU 이미지가 포함된 gzip 아카이브 로드
 3. `.env.secret` 예제 생성
 4. 로그와 MCP 파일 교환 폴더 생성
-5. RAGFlow, 한국어 PaddleOCR, Infinity, MySQL, MinIO, Valkey, 공식 MCP, LIG 관리 MCP 시작
+5. RAGFlow, Infinity, MySQL, MinIO, Valkey, 공식 MCP, LIG 관리 MCP 시작
 
 `install-gpu.ps1`은 CPU 이미지와 분리된 CUDA 12.8·cuDNN 9 RAGFlow 이미지를 사용합니다. 이미지 로드 후 임시 컨테이너에서 GPU 이름과 VRAM, `libcublasLt.so.12` 로딩과 DeepDOC CUDA 세션 생성을 검증합니다. 검증 실패 시 CPU 모드로 대체하지 않고 설치를 중단합니다.
 
-CPU·GPU 설치 모두 한국어 PP-OCRv5 `CPUExecutionProvider`를 사용합니다. 일반 OCR은 GPU를 점유하지 않으며, GPU 설치의 NVIDIA 장치는 DeepDOC와 선택형 PaddleOCR-VL VLM에만 사용합니다. 모델은 이미지에 포함되어 폐쇄망에서 추가 다운로드하지 않습니다.
+CPU·GPU 기본 설치에는 OCR 모델이 포함되지 않습니다. 한국어 PP-OCRv5 추가 패키지는 `CPUExecutionProvider`만 사용하며, GPU 설치의 NVIDIA 장치는 DeepDOC와 선택형 PaddleOCR-VL VLM에만 사용합니다. 선택 패키지의 모델은 해당 이미지에 포함되어 폐쇄망에서 추가 다운로드하지 않습니다.
 
 데이터셋 화면에서 저장한 파서/OCR 모델 설정은 공유 DB의 데이터셋과 기존 문서에 함께 반영되어 모든 작업 컨테이너가 같은 값을 읽습니다. 대기 중 작업은 새 설정으로 실행되고, 이미 실행 중인 작업만 결과 일관성을 위해 시작 시점 설정을 유지합니다. UI에서 수정한 모델 URL·토큰·알고리즘·API 방식은 컨테이너 환경변수가 다시 덮어쓰지 않습니다. 사내 원격 PaddleX API는 `API 방식=PaddleX Image API`로 지정하고, 번들 내부 OCR은 `자동` 또는 `RAGFlow Job API`를 사용합니다. Infinity는 CPU·시스템 메모리 상한 없이 실행하며 설치 전 구성 검사가 이를 확인합니다. 서비스 실행기는 회사 보안 정책에 맞춰 Bash 문자열 명령과 `eval`을 사용하지 않습니다.
 
@@ -69,6 +69,7 @@ CPU·GPU 설치 모두 한국어 PP-OCRv5 `CPUExecutionProvider`를 사용합니
 - `start.ps1`: 기존 데이터 볼륨을 유지하며 서비스 시작
 - `start-gpu.ps1`: NVIDIA DeepDoc GPU 프로필과 `.env.lig`에 지정한 executor 수로 시작. 12 GiB는 GPU VRAM 기준이며 CPU·시스템 RAM 상한을 설정하지 않음
 - `install-embedding-cpu.ps1`: 별도 Qwen3 이미지 아카이브를 검증·로드하고 CPU 임베딩 서비스 시작
+- `install-paddleocr.ps1`: 별도 한국어 PP-OCRv5 이미지 아카이브를 검증·로드하고 CPU OCR 서비스 시작
 - `start-embedding-cpu.ps1` / `stop-embedding.ps1`: 선택형 임베딩 서비스만 시작 또는 중지
 - `test-embedding.ps1`: health와 한국어·영어 1024차원 배치 추론 검증
 - `start-paddleocr.ps1` / `stop-paddleocr.ps1`: 선택형 일반 PP-OCRv5 CPU 서비스만 시작 또는 중지
@@ -182,13 +183,20 @@ RAGFlow 웹 UI의 `설정 → 모델 공급자`에서 다음 값을 등록합니
 
 DeepDoc/PaddleOCR-VL GPU와 이 embedding 서비스는 별개입니다. Qwen3와 일반 PP-OCRv5는 CPU에서 실행되므로 12 GiB GPU VRAM을 사용하지 않지만, Docker 시스템 RAM을 사용합니다. Qwen3의 유휴 시스템 RAM은 약 1.5 GiB이며 Compose는 임의의 CPU·RAM 상한을 두지 않습니다.
 
-기본 이미지 반입 후에는 `verify-cpu-images.ps1`을 실행해 암호 PDF 본문 보존, 일반 문서 암호 상태 정리, PaddleOCR 한국어 모델 및 런타임 패치 포함 여부를 이미지 내부에서 확인할 수 있습니다. GPU 설치에서도 공통 CPU 이미지 세트 검증에는 같은 명령을 사용합니다.
+기본 이미지 반입 후에는 `verify-cpu-images.ps1`을 실행해 암호 PDF 본문 보존, 일반 문서 암호 상태 정리, OCR 연동 및 청킹 런타임 패치 포함 여부를 RAGFlow 이미지 내부에서 확인할 수 있습니다. 한국어 PaddleOCR 모델은 기본 이미지에 없으며 `install-paddleocr.ps1`이 별도 이미지의 모델 메타데이터와 health를 검증합니다.
 
 새 embedding 모델을 기본값으로 지정해도 기존 데이터셋의 `embd_id`는 자동 변경되지 않습니다. 기존 데이터셋은 그대로 유지하고 새 데이터셋으로 검색 품질을 검증하십시오. 기존 데이터셋을 전환해야 한다면 문서를 전부 재인덱싱해야 하며, 서로 다른 모델의 벡터를 한 데이터셋에 섞지 마십시오.
 
 ### 한국어 OCR 선택
 
 한국어 PDF에서 중국어나 특수문자가 생성되면 임베딩 문제가 아니라 OCR 문자 집합 문제입니다.
+
+번들을 `-IncludePaddleOcr`로 만들었다면 기본 설치 후 한 번만 추가 설치합니다.
+
+```powershell
+.\install-paddleocr.ps1
+.\test-paddleocr.ps1
+```
 
 1. 데이터셋 기본 설정의 언어를 `Korean`으로 지정합니다.
 2. 텍스트 선택과 복사가 정상인 PDF는 PDF 파서 `Plain Text`를 사용합니다.
@@ -231,6 +239,8 @@ pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-build
 pwsh LIG-Deployment/airgap-export.ps1 `
   -Destination "D:\LIG-RAGFlow-Airgap" `
   -IncludeGpu `
+  -IncludeEmbedding `
+  -IncludePaddleOcr `
   -IncludePaddleOcrVl
 ```
 

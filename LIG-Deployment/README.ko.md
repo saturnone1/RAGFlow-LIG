@@ -232,13 +232,14 @@ Windows의 Docker VHDX는 내부 데이터를 지워도 파일 크기가 즉시 
 
 RAGFlow 기본 이미지는 임베딩 모델을 포함하지 않습니다. 이 배포는 Apache-2.0의 `Qwen/Qwen3-Embedding-0.6B`를 커밋 `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3`으로 고정하고 TEI `cpu-1.9` 이미지에 포함합니다. 모델은 100개 이상 언어와 1024차원 벡터를 지원합니다. 운영 설정은 RAGFlow 청크 처리에 맞춰 요청당 최대 2,048 토큰으로 자동 절단하며, 검색 질의에만 Qwen 권장 instruction을 붙이고 문서 청크는 원문 그대로 임베딩합니다.
 
-에어갭 반입 폴더의 기본 런타임 아카이브에는 CPU 이미지가 들어갑니다. CUDA 12.8 GPU 이미지는 `-IncludeGpu`, Qwen3 임베딩 아카이브는 `-IncludeEmbedding`을 지정한 경우에만 추가됩니다. 각 선택 이미지를 포함한 번들에서만 `install-gpu.ps1` 또는 `install-embedding-cpu.ps1`을 사용할 수 있습니다.
+에어갭 반입 폴더의 기본 런타임 아카이브에는 RAGFlow, UI, MCP, Infinity, MySQL, MinIO, Valkey만 들어갑니다. 임베딩 모델과 일반 PaddleOCR 및 PaddleOCR-VL 이미지는 기본 아카이브에서 모두 제외하고, 각각 `-IncludeEmbedding`, `-IncludePaddleOcr`, `-IncludePaddleOcrVl`로 만드는 독립 추가 아카이브에만 넣습니다. CUDA 12.8 DeepDOC용 RAGFlow 이미지는 `-IncludeGpu`를 지정한 경우 기본 런타임 아카이브에 함께 들어갑니다.
 
-온라인 PC에서 먼저 `build`를 완료한 뒤 반입 묶음을 만듭니다. GPU를 동봉할 때만 `gpu-build`와 `-IncludeGpu`, 임베딩을 동봉할 때만 `embedding-build`와 `-IncludeEmbedding`이 필요합니다. 결과 폴더에는 선택한 고정 버전 이미지, 공식 Compose 런타임, 문서 호환성·키 회전 자료, 운영 스크립트와 SHA-256 manifest가 생성됩니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않습니다. `.env.secret`은 보안상 묶음에 포함하지 않고 예제 파일만 제공합니다.
+온라인 PC에서 먼저 `build`를 완료한 뒤 반입 묶음을 만듭니다. GPU를 동봉할 때만 `gpu-build`와 `-IncludeGpu`, 임베딩을 동봉할 때만 `embedding-build`와 `-IncludeEmbedding`이 필요합니다. 일반 PaddleOCR은 `-IncludePaddleOcr`, PaddleOCR-VL은 `paddleocr-vl-build` 후 `-IncludePaddleOcrVl`로 추가합니다. 결과 폴더에는 기본 런타임과 선택 패키지가 서로 다른 gzip 아카이브로 생성되며, 기본 `install.ps1`/`install-gpu.ps1`은 추가 아카이브를 로드하지 않습니다. 원본 Git 저장소는 폐쇄망 PC에 필요하지 않고 `.env.secret`은 보안상 묶음에 포함하지 않습니다.
 내보내기 대상은 기존 파일이나 비밀값이 섞이지 않은 빈 폴더여야 합니다.
 
 ```powershell
-.\airgap-export.ps1 -Destination D:\LIG-RAGFlow-Airgap -IncludeEmbedding
+.\airgap-export.ps1 -Destination D:\LIG-RAGFlow-Airgap `
+  -IncludeGpu -IncludeEmbedding -IncludePaddleOcr -IncludePaddleOcrVl
 ```
 
 생성된 `D:\LIG-RAGFlow-Airgap` 폴더 전체를 폐쇄망 PC로 복사한 후 Docker Desktop을 시작하고 다음 한 줄로 설치합니다.
