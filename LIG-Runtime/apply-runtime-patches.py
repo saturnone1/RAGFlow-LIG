@@ -7,6 +7,8 @@ import hashlib
 import sys
 from pathlib import Path
 
+from runtime_patches.dataset_settings import apply_dataset_settings_patch
+
 EXPECTED_EMBEDDING_SHA256 = "b844aec1bd2bc49bb54e55beb7d6273a7da6cbd5cfe15b3e96fd7882e0b3e4eb"
 EXPECTED_PADDLEOCR_SHA256 = "94b735a444ee81a03bcd7bd996851a7e3759ee95e14e0b8d838a5d59f68e6704"
 EXPECTED_TASK_EXECUTOR_SHA256 = "389f45143dc98e3882545fdea8b18b1c4537e597448ae5b72cfed41a0305511a"
@@ -38,7 +40,6 @@ EXPECTED_TASK_EXECUTOR_LIMITER_SHA256 = "9d71b0c22e56b5c7e6b333a80aa83ce9de844f3
 EXPECTED_SETTINGS_SHA256 = "c81b2b13f2a19a01892a9208cb5df3753f5845616b6655eec6c71f5dca741610"
 EXPECTED_DEEPDOC_OCR_SHA256 = "a4b1c380046584124edacb1d14c2c11fe293e843c0ae32bbe3e3a8a26b8474e3"
 EXPECTED_DB_MODELS_SHA256 = "26d9734b0b249c207e887d40bbe2734235e5d66c1805c9be5f05743605daced4"
-EXPECTED_DATASET_API_SERVICE_SHA256 = "d00fdaad3cfcd533f6dcc13f5dd653d7bb8db27bc13dc8b727cafae5247c4907"
 OLD_TIMEOUT = "headers={\"Content-Type\": \"application/json\"}, timeout=30)"
 NEW_TIMEOUT = (
     'headers={"Content-Type": "application/json"}, '
@@ -77,7 +78,7 @@ def main() -> None:
         )
 
     embedding_target = Path(sys.argv[1])
-    source = embedding_target.read_bytes()
+    source = normalized_source(embedding_target)
     actual_sha256 = hashlib.sha256(source).hexdigest()
     if actual_sha256 != EXPECTED_EMBEDDING_SHA256:
         raise SystemExit(
@@ -140,7 +141,7 @@ def main() -> None:
     embedding_target.write_text(text, encoding="utf-8")
 
     paddleocr_target = Path(sys.argv[2])
-    source = paddleocr_target.read_bytes()
+    source = normalized_source(paddleocr_target)
     actual_sha256 = hashlib.sha256(source).hexdigest()
     if actual_sha256 != EXPECTED_PADDLEOCR_SHA256:
         raise SystemExit(
@@ -519,7 +520,7 @@ def main() -> None:
     paddleocr_target.write_text(text, encoding="utf-8")
 
     task_executor_target = Path(sys.argv[3])
-    source = task_executor_target.read_bytes()
+    source = normalized_source(task_executor_target)
     actual_sha256 = hashlib.sha256(source).hexdigest()
     if actual_sha256 != EXPECTED_TASK_EXECUTOR_SHA256:
         raise SystemExit(
@@ -2390,39 +2391,20 @@ def main() -> None:
     )
     db_models_target.write_text(text, encoding="utf-8")
 
-    dataset_service_target = checked_target(Path(sys.argv[32]), EXPECTED_DATASET_API_SERVICE_SHA256, "api/apps/services/dataset_api_service.py")
-    text = dataset_service_target.read_text(encoding="utf-8")
-    text = replace_once(text, "from api.db.db_models import File\n", "from api.db.db_models import Document, File\n", "dataset Document import")
-    text = replace_once(
-        text,
-        '    if not KnowledgebaseService.update_by_id(kb.id, req):\n'
-        '        return False, "Update dataset error.(Database error)"\n\n'
-        '    ok, k = KnowledgebaseService.get_by_id(kb.id)\n',
-        '    if not KnowledgebaseService.update_by_id(kb.id, req):\n'
-        '        return False, "Update dataset error.(Database error)"\n\n'
-        '    # Documents own the parser configuration consumed by task executors.\n'
-        '    # Synchronize it in the shared database so every worker sees the UI save.\n'
-        '    document_update = {}\n'
-        '    if "parser_config" in req:\n'
-        '        document_update["parser_config"] = req["parser_config"]\n'
-        '    if "parser_id" in req and req["parser_id"]:\n'
-        '        document_update["parser_id"] = req["parser_id"]\n'
-        '    if "pipeline_id" in req:\n'
-        '        document_update["pipeline_id"] = req["pipeline_id"]\n'
-        '    if document_update:\n'
-        '        Document.update(document_update).where(Document.kb_id == kb.id).execute()\n\n'
-        '    ok, k = KnowledgebaseService.get_by_id(kb.id)\n',
-        "dataset parser configuration propagation",
-    )
-    dataset_service_target.write_text(text, encoding="utf-8")
+    apply_dataset_settings_patch(Path(sys.argv[32]))
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:
-    source = path.read_bytes()
+    source = normalized_source(path)
     actual_sha256 = hashlib.sha256(source).hexdigest()
     if actual_sha256 != expected_sha256:
         raise SystemExit(f"Unsupported RAGFlow {label}: expected {expected_sha256}, got {actual_sha256}")
     return path
+
+
+def normalized_source(path: Path) -> bytes:
+    """Hash Git text identically on Windows and Linux without weakening pinning."""
+    return path.read_bytes().replace(b"\r\n", b"\n")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:

@@ -46,27 +46,34 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 .\start-embedding-cpu.ps1
 .\stop-embedding.ps1
 .\test-embedding.ps1
+.\start-paddleocr.ps1
+.\stop-paddleocr.ps1
+.\test-paddleocr.ps1
 .\verify-cpu-images.ps1
 .\stop.ps1
 .\status.ps1
 .\diagnostics.ps1
 .\diagnostics-gpu.ps1
+.\recovery-test.ps1
+.\backup.ps1
 .\logs.ps1
 ```
 
-GPU로 설치한 장비는 재부팅 후 반드시 `start-gpu.ps1`을 사용합니다. `install-gpu.ps1`은 GPU 이름·VRAM과 DeepDOC의 CUDA 접근을 확인한 후, 일반 PP-OCRv5는 CPU 서비스로 시작합니다. GPU 스크립트도 `.env.lig`의 공통 기본값인 worker 3개와 worker당 task/parser 슬롯 1개를 그대로 사용하며 별도 강제값은 없습니다. VRAM이 부족할 때만 운영자가 worker 수를 낮춥니다.
+GPU로 설치한 장비는 재부팅 후 반드시 `start-gpu.ps1`을 사용합니다. `install-gpu.ps1`은 GPU 이름·VRAM과 DeepDOC의 CUDA 접근을 확인하지만 일반 PP-OCRv5를 자동 시작하지 않습니다. 필요할 때 `start-paddleocr.ps1`을 별도로 실행하십시오. GPU 스크립트도 `.env.lig`의 공통 기본값인 worker 3개와 worker당 task/parser 슬롯 1개를 그대로 사용하며 별도 강제값은 없습니다. VRAM이 부족할 때만 운영자가 worker 수를 낮춥니다.
 
-`diagnostics.ps1`은 비밀값 없이 서비스 health, task executor heartbeat, 컨테이너 자원 스냅숏, 최근 단계별 처리시간과 오류를 JSON으로 출력합니다. 원격 PaddleX 사용 시에는 task executor·parser 슬롯·페이지 요청 수를 곱한 실효 최대 동시 요청도 함께 표시합니다.
+일반 `start.ps1`과 `start-gpu.ps1`은 이미 선택 실행 중인 OCR·embedding 컨테이너를 제거하지 않습니다. `stop.ps1`은 모든 선택 프로필까지 함께 중지하지만 데이터 볼륨은 보존합니다.
+
+`diagnostics.ps1`은 비밀값 없이 서비스 health, Redis 큐 길이·pending·lag, task executor heartbeat, 컨테이너 자원 스냅숏, 최근 단계별 처리시간과 오류를 JSON으로 출력합니다. 원격 PaddleX 사용 시에는 task executor·parser 슬롯·페이지 요청 수를 곱한 실효 최대 동시 요청도 함께 표시합니다. `backup.ps1`은 네 데이터 볼륨과 환경 파일을 같은 시점으로 백업하고 SHA-256 manifest를 만듭니다. 복원은 상세 설명서의 `restore.ps1 -ConfirmRestore` 절차를 따릅니다.
 
 ## 한국어 PDF
 
 - 텍스트 선택·복사가 정상: 데이터셋 언어 `Korean`, PDF 파서 `Plain Text`
-- 스캔 또는 글꼴 매핑이 깨짐: 데이터셋 언어 `Korean`, 청킹 `Naive`, PDF 파서 `paddleocr-from-env`. 내부 URL, 토큰과 `PP-OCRv5`는 자동 적용되며, 대형 PDF는 고정 기본 `PDF_TASK_PAGE_SIZE=40` 범위만 잘라 OCR 서비스에 전송합니다. 데이터셋 `task_page_size`로 덮어쓸 수 있습니다.
+- 스캔 또는 글꼴 매핑이 깨짐: 먼저 `start-paddleocr.ps1`을 실행한 뒤 데이터셋 언어 `Korean`, 청킹 `Naive`, PDF 파서 `paddleocr-from-env`를 선택합니다. 내부 URL, 토큰과 `PP-OCRv5`는 자동 적용되며, 대형 PDF는 고정 기본 `PDF_TASK_PAGE_SIZE=40` 범위만 잘라 OCR 서비스에 전송합니다. 데이터셋 `task_page_size`로 덮어쓸 수 있습니다.
 - 영어·중국어 또는 복잡한 표·레이아웃: 기존 `DeepDOC` 유지
 
-`-IncludeGpu -IncludePaddleOcrVl`로 만든 선택 번들에서는 `install-paddleocr-vl.ps1`을 추가 실행할 수 있습니다. 설치 후 모델 목록에 일반 OCR `paddleocr-from-env`와 VL `paddleocr-vl-from-env`가 따로 나타나며, VL은 gateway health가 정상일 때만 활성화됩니다. 12 GiB 기본 구성은 레이아웃 검출을 CPU, 0.9B VLM을 GPU에서 실행하고 vLLM cache 설정을 소형 GPU에 맞춥니다.
+`-IncludeGpu -IncludePaddleOcrVl`로 만든 선택 번들에서는 `install-paddleocr-vl.ps1`을 추가 실행할 수 있습니다. `start-paddleocr.ps1`을 실행하면 일반 OCR `paddleocr-from-env`, VL gateway가 정상이면 `paddleocr-vl-from-env`가 모델 목록에 서로 독립적으로 나타납니다. 12 GiB 기본 구성은 레이아웃 검출을 CPU, 0.9B VLM을 GPU에서 실행하고 vLLM cache 설정을 소형 GPU에 맞춥니다.
 
-일반 PaddleOCR 상태는 `http://127.0.0.1:42316/health`에서 확인합니다. CPU·GPU 설치 모두 응답의 `device`와 `provider`가 `cpu`/`CPUExecutionProvider`여야 합니다. 선택형 VL의 VLM만 GPU를 사용하며 상태는 `42318`에서 별도로 확인합니다.
+선택 실행한 일반 PaddleOCR 상태는 `test-paddleocr.ps1` 또는 `http://127.0.0.1:42316/health`에서 확인합니다. CPU·GPU 설치 모두 응답의 `device`와 `provider`가 `cpu`/`CPUExecutionProvider`여야 합니다. 선택형 VL의 VLM만 GPU를 사용하며 상태는 `42318`에서 별도로 확인합니다.
 
 PDF, Office 및 HWP/HWPX의 파일 열기 비밀번호는 업로드 창에서 파일별로 입력합니다. 최신 Office와 HWPX 암호는 지원하며, 암호화된 바이너리 HWP는 HWPX 또는 DOCX로 다시 저장해야 합니다. 암호 PDF 로그가 `OCR started`까지 진행됐다면 열기 암호는 이미 통과한 것이며, 소유자 암호가 필요한 권한 제한은 OCR 전에 별도 오류로 표시됩니다. 배포용 문서와 IRM/FASOO DRM은 처리하지 않습니다. 저장된 비밀번호 복호화에 필요한 `.env.secret`은 DB와 같은 복구 시점으로 별도 암호화 백업하십시오. 전체 확장자 호환표와 키 회전 절차는 상위 `DOCUMENT-COMPATIBILITY.ko.md`를 따릅니다.
 

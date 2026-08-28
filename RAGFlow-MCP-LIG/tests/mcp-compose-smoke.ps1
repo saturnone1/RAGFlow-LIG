@@ -51,11 +51,24 @@ $initialize = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 $initResponse = Invoke-Mcp $initialize
 if (-not $initResponse.Session) { throw "No MCP session ID" }
 $tools = ConvertFrom-Mcp (Invoke-Mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' $initResponse.Session).Content
-if (@($tools.result.tools).Count -ne 19) { throw "Expected 19 MCP tools" }
+if (@($tools.result.tools).Count -ne 23) { throw "Expected 23 MCP tools" }
 
 $versionCall = '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rag_flow_api_request","arguments":{"method":"GET","relativePath":"api/v1/system/version"}}}'
 $version = ConvertFrom-Mcp (Invoke-Mcp $versionCall $initResponse.Session).Content
 if ($version.error -or $version.result.isError) { throw "Compose MCP RAGFlow version call failed" }
+
+$summaryCall = '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_rag_flow_dataset_summaries","arguments":{"page":1,"pageSize":5}}}'
+$summaryResult = ConvertFrom-Mcp (Invoke-Mcp $summaryCall $initResponse.Session).Content
+if ($summaryResult.error -or $summaryResult.result.isError) { throw "Lightweight dataset summary call failed" }
+$summaryPayload = ([string]($summaryResult.result.content | Where-Object type -eq "text" | Select-Object -First 1).text) | ConvertFrom-Json
+$firstDataset = @($summaryPayload.data) | Select-Object -First 1
+$documentProjectionTested = $false
+if ($firstDataset.id) {
+    $documentCall = @{ jsonrpc="2.0"; id=7; method="tools/call"; params=@{ name="get_rag_flow_dataset_processing_status"; arguments=@{ datasetId=$firstDataset.id; page=1; pageSize=5 } } } | ConvertTo-Json -Depth 10 -Compress
+    $documentResult = ConvertFrom-Mcp (Invoke-Mcp $documentCall $initResponse.Session).Content
+    if ($documentResult.error -or $documentResult.result.isError) { throw "Lightweight document status call failed" }
+    $documentProjectionTested = $true
+}
 
 $uploadedFileId = $null
 try {
@@ -94,9 +107,11 @@ finally {
 
 [pscustomobject]@{
     status = "passed"
-    tools = 19
+    tools = 23
     authentication = $true
     ragflowNetwork = $health.ragflowBaseUrl
     versionCall = $true
+    lightweightDatasetSummary = $true
+    lightweightDocumentStatus = $documentProjectionTested
     mountedFileUpload = [bool]$GenericUpload
 } | ConvertTo-Json -Compress

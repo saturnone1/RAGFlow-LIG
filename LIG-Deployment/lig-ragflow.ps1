@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("config", "pull", "build", "gpu-build", "ui-build", "mcp-build", "ocr-build", "paddleocr-vl-build", "paddleocr-vl-pull", "paddleocr-vl-start", "paddleocr-vl-stop", "paddleocr-vl-status", "paddleocr-vl-test", "embedding-build", "embedding-start", "embedding-stop", "embedding-status", "embedding-test", "start", "stop", "status", "diagnostics", "logs")]
+    [ValidateSet("config", "pull", "build", "gpu-build", "ui-build", "mcp-build", "ocr-build", "paddleocr-start", "paddleocr-stop", "paddleocr-status", "paddleocr-test", "paddleocr-vl-build", "paddleocr-vl-pull", "paddleocr-vl-start", "paddleocr-vl-stop", "paddleocr-vl-status", "paddleocr-vl-test", "embedding-build", "embedding-start", "embedding-stop", "embedding-status", "embedding-test", "start", "stop", "status", "diagnostics", "recovery-test", "logs")]
     [string]$Action = "status"
 )
 
@@ -50,6 +50,15 @@ $composeArguments += @("--env-file", $secretFile)
 $composeArguments += @(
     "-f", (Join-Path $dockerDirectory "docker-compose.yml"),
     "-f", (Join-Path $deploymentDirectory "docker-compose.lig.yml")
+)
+$allServiceProfileArguments = @(
+    "--profile", "infinity",
+    "--profile", "cpu",
+    "--profile", "gpu",
+    "--profile", "deepdoc",
+    "--profile", "paddleocr",
+    "--profile", "paddleocr-vl",
+    "--profile", "embedding-cpu"
 )
 
 function Invoke-Compose([string[]]$Arguments) {
@@ -354,7 +363,7 @@ function Test-ComposeGpuReservation($Service) {
 
 function Assert-OcrDeviceTopology {
     $rendered = Invoke-ComposeCapture -Arguments @(
-        "--profile", "infinity", "--profile", "cpu", "--profile", "gpu", "--profile", "paddleocr-vl",
+        "--profile", "infinity", "--profile", "cpu", "--profile", "gpu", "--profile", "paddleocr", "--profile", "paddleocr-vl",
         "config", "--format", "json"
     )
     $compose = ($rendered.Lines -join "`n") | ConvertFrom-Json
@@ -454,8 +463,37 @@ function Test-McpInitialize([string]$Url, [string]$BearerToken = "") {
     }
 }
 
+function Get-RedisQueueDiagnostics([string]$ContainerId, [string]$Password) {
+    if (-not $ContainerId -or -not $Password) { return @() }
+    $rows = @()
+    foreach ($stream in @("te.1.common", "te.0.common")) {
+        $lengthResult = Invoke-DockerCapture -Arguments @(
+            "exec", $ContainerId, "redis-cli", "--no-auth-warning", "-a", $Password,
+            "--raw", "XLEN", $stream
+        ) -AllowFailure
+        $groupResult = Invoke-DockerCapture -Arguments @(
+            "exec", $ContainerId, "redis-cli", "--no-auth-warning", "-a", $Password,
+            "--raw", "XINFO", "GROUPS", $stream
+        ) -AllowFailure
+        $tokens = @($groupResult.Lines)
+        $pendingIndex = [Array]::IndexOf($tokens, "pending")
+        $lagIndex = [Array]::IndexOf($tokens, "lag")
+        $consumersIndex = [Array]::IndexOf($tokens, "consumers")
+        $rows += [pscustomobject]@{
+            Stream = $stream
+            Length = if ($lengthResult.ExitCode -eq 0 -and $lengthResult.Lines.Count) { [long]$lengthResult.Lines[-1] } else { $null }
+            Pending = if ($pendingIndex -ge 0 -and $pendingIndex + 1 -lt $tokens.Count) { [long]$tokens[$pendingIndex + 1] } else { $null }
+            Lag = if ($lagIndex -ge 0 -and $lagIndex + 1 -lt $tokens.Count) { [long]$tokens[$lagIndex + 1] } else { $null }
+            Consumers = if ($consumersIndex -ge 0 -and $consumersIndex + 1 -lt $tokens.Count) { [int]$tokens[$consumersIndex + 1] } else { $null }
+            Available = $lengthResult.ExitCode -eq 0
+        }
+    }
+    return $rows
+}
+
 function Invoke-Diagnostics {
     $configuration = Get-EnvFileValues $ligEnvFile
+    $upstreamConfiguration = Get-EnvFileValues $upstreamEnvFile
     $secrets = Get-EnvFileValues $secretFile
     $apiKey = $secrets["RAGFLOW_MCP_API_KEY"]
     $apiBinding = Get-ConfigurationValue $configuration "SVR_HTTP_PORT" "127.0.0.1:42301"
@@ -478,6 +516,7 @@ function Invoke-Diagnostics {
     $managementMcpUrl = "http://127.0.0.1:$managementMcpPort/mcp"
     $apiReachable = $false
     $serviceHealth = $null
+    $dependencyHealth = $null
     $healthDetail = $null
     $apiError = $null
     $dockerVersionResult = Invoke-DockerCapture -Arguments @("version", "--format", "{{.Server.Version}}") -AllowFailure
@@ -490,6 +529,15 @@ function Invoke-Diagnostics {
     }
     catch {
         $apiError = $_.Exception.Message
+    }
+    try {
+        $dependencyHealth = Invoke-RestMethod -Uri "$apiBase/api/v1/system/healthz" -TimeoutSec 10
+    }
+    catch {
+        if ($_.ErrorDetails.Message) {
+            try { $dependencyHealth = $_.ErrorDetails.Message | ConvertFrom-Json }
+            catch { $dependencyHealth = [pscustomobject]@{ status = "unavailable" } }
+        }
     }
     $hasUsableApiKey = $apiKey -and $apiKey -notmatch 'replace-with'
     if ($apiReachable -and $hasUsableApiKey) {
@@ -518,7 +566,7 @@ function Invoke-Diagnostics {
     $vlHealth = $null
     try { $vlHealth = Invoke-RestMethod -Uri "$vlUrl/health" -TimeoutSec 10 } catch { $vlHealth = [pscustomobject]@{ status = "not-running" } }
 
-    $composeResult = Invoke-DockerCapture -Arguments (@($composeArguments) + @("ps", "--format", "json")) -AllowFailure
+    $composeResult = Invoke-DockerCapture -Arguments (@($composeArguments) + $allServiceProfileArguments + @("ps", "--all", "--format", "json")) -AllowFailure
     $composeRows = @($composeResult.Lines | ForEach-Object {
         try { $_ | ConvertFrom-Json } catch { $null }
     } | Where-Object { $null -ne $_ })
@@ -597,6 +645,9 @@ function Invoke-Diagnostics {
             }
         })
     }
+    $redisContainer = Get-ComposeServiceContainerId "redis"
+    $redisPassword = Get-ConfigurationValue $upstreamConfiguration "REDIS_PASSWORD"
+    $redisQueues = @(Get-RedisQueueDiagnostics $redisContainer $redisPassword)
 
     $taskExecutorWorkers = [int](Get-ConfigurationValue $configuration "TASK_EXECUTOR_WORKERS" "3")
     $taskSlotsPerWorker = [int](Get-ConfigurationValue $configuration "MAX_CONCURRENT_TASKS" "1")
@@ -620,6 +671,7 @@ function Invoke-Diagnostics {
         }
         Connectivity = [pscustomobject]@{
             ApiPing = $apiReachable
+            DependencyHealth = $dependencyHealth
             OfficialMcp = $officialMcpProbe
             ManagementMcp = $managementMcpProbe
         }
@@ -637,7 +689,7 @@ function Invoke-Diagnostics {
             ThreadPoolWorkers = Get-ConfigurationValue $configuration "THREAD_POOL_MAX_WORKERS"
             DoclingEnabled = Get-ConfigurationValue $configuration "USE_DOCLING"
             EmbeddingMode = if ($containerNames -contains "lig-ragflow-qwen3-embedding-1") { "optional Qwen3 TEI CPU service" } else { "configured in RAGFlow (external provider)" }
-            KoreanOcr = "PP-OCRv5 (CPU)"
+            KoreanOcr = if ($containerNames -contains "lig-ragflow-paddleocr-cpu-1") { "optional PP-OCRv5 CPU service (running)" } else { "optional PP-OCRv5 CPU service (stopped)" }
             StandaloneDeepDocEnabled = ((Get-ConfigurationValue $configuration "COMPOSE_PROFILES") -split ',' -contains 'deepdoc')
         }
         Services = $composeRows | Select-Object Name, Service, State, Health, Status, Ports
@@ -652,6 +704,7 @@ function Invoke-Diagnostics {
             PaddleOcrVl = $vlHealth
         }
         TaskExecutorHeartbeats = $heartbeats
+        RedisQueues = $redisQueues
         CurrentTaskExecutorHeartbeatCount = @($heartbeats | Where-Object { $_.CurrentContainer }).Count
         ContainerStats = $stats | Select-Object Name, CPUPerc, MemUsage, MemPerc, BlockIO, NetIO
         RecentStageTimings = $timingSamples
@@ -661,6 +714,50 @@ function Invoke-Diagnostics {
     }
 
     $report | ConvertTo-Json -Depth 8
+}
+
+function Wait-ContainerHealthy([string]$ContainerId, [int]$TimeoutSeconds = 180) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $result = Invoke-DockerCapture -Arguments @(
+            "inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", $ContainerId
+        ) -AllowFailure
+        $stateLine = $result.Lines | Select-Object -Last 1
+        $state = if ($null -eq $stateLine) { "" } else { $stateLine.Trim() }
+        if ($result.ExitCode -eq 0 -and $state -in @("healthy", "running")) { return }
+        if ($state -in @("unhealthy", "exited", "dead")) { throw "컨테이너 복구 실패: $ContainerId ($state)" }
+        Start-Sleep -Seconds 3
+    } while ((Get-Date) -lt $deadline)
+    throw "컨테이너가 제한 시간 내 정상화되지 않았습니다: $ContainerId"
+}
+
+function Invoke-RecoveryTest {
+    $configuration = Get-EnvFileValues $ligEnvFile
+    $device = (Get-ConfigurationValue $configuration "DEVICE" "cpu").Trim().ToLowerInvariant()
+    $worker = Get-ComposeServiceContainerId "ragflow-worker-$device"
+    $infinity = Get-ComposeServiceContainerId "infinity"
+    $migration = Get-ComposeServiceContainerId "ragflow-migrate"
+    foreach ($required in @($worker, $infinity, $migration)) {
+        if (-not $required) { throw "복구 시험에 필요한 컨테이너가 없습니다. 먼저 RAGFlow를 시작하십시오." }
+    }
+    $migrationResult = Invoke-DockerCapture -Arguments @(
+        "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", $migration
+    ) -AllowFailure
+    if (($migrationResult.Lines | Select-Object -Last 1).Trim() -ne "exited 0") {
+        throw "DB 마이그레이션 작업이 성공 상태가 아닙니다: $(($migrationResult.Lines -join ' ').Trim())"
+    }
+
+    Write-Warning "격리 worker와 Infinity를 순서대로 재시작합니다. 실행 중 문서는 lease 기반으로 재개되지만 시험 중 처리가 잠시 멈춥니다."
+    Invoke-Docker @("restart", $worker)
+    Wait-ContainerHealthy $worker
+    Invoke-Docker @("restart", $infinity)
+    Wait-ContainerHealthy $infinity
+
+    $binding = Get-ConfigurationValue $configuration "SVR_HTTP_PORT" "127.0.0.1:42301"
+    $port = ($binding -split ':')[-1]
+    $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/system/healthz" -TimeoutSec 15
+    if (-not $health) { throw "재시작 후 API 의존성 상태를 확인할 수 없습니다." }
+    Write-Host "DB 마이그레이션, worker 재시작, Infinity 재시작, API 의존성 상태 시험을 통과했습니다."
 }
 
 switch ($Action) {
@@ -749,11 +846,10 @@ switch ($Action) {
         } else {
             Get-ConfigurationValue $configuration "RAGFLOW_IMAGE"
         }
-        $ocrImage = Get-ConfigurationValue $configuration "PADDLEOCR_IMAGE"
         $mcpImage = Get-ConfigurationValue $configuration "RAGFLOW_MCP_LIG_IMAGE" "lig/ragflow-mcp:v0.26.4-3"
-        foreach ($requiredImage in @($ragflowImage, $ocrImage, $mcpImage)) {
+        foreach ($requiredImage in @($ragflowImage, $mcpImage)) {
             if ([string]::IsNullOrWhiteSpace($requiredImage)) {
-                throw "필수 이미지 설정이 없습니다. RAGFLOW_IMAGE, RAGFLOW_GPU_IMAGE, PADDLEOCR_IMAGE, RAGFLOW_MCP_LIG_IMAGE를 확인하십시오."
+                throw "필수 이미지 설정이 없습니다. RAGFLOW_IMAGE, RAGFLOW_GPU_IMAGE, RAGFLOW_MCP_LIG_IMAGE를 확인하십시오."
             }
         }
 
@@ -775,18 +871,44 @@ switch ($Action) {
             }
             Invoke-Docker @("build", "--file", $mcpDockerfile, "--tag", $mcpImage, $mcpDirectory)
         }
-        $ocrImageInspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $ocrImage) -AllowFailure
-        if ($ocrImageInspect.ExitCode -ne 0) {
-            if (-not (Test-Path -LiteralPath $ocrDockerfile -PathType Leaf)) {
-                throw "Korean PaddleOCR image is missing and its Dockerfile is unavailable: $ocrDockerfile"
-            }
-            Invoke-Docker @("build", "--file", $ocrDockerfile, "--tag", $ocrImage, $ocrDirectory)
-        }
         # Start asynchronously. RAGFlow's health check verifies every backing
         # service and can remain in "Waiting" long after the containers have
         # started, which makes an otherwise successful start look hung.
-        Invoke-Compose @("up", "-d", "--remove-orphans")
+        # 선택 실행한 OCR/embedding 프로필은 이 명령의 활성 프로필에 포함되지
+        # 않을 수 있으므로 orphan으로 제거하지 않습니다. 전체 정리는 stop이 담당합니다.
+        Invoke-Compose @("up", "-d")
         Invoke-Compose @("ps")
+    }
+    "paddleocr-start" {
+        Assert-FreeSpace
+        $configuration = Get-EnvFileValues $ligEnvFile
+        $ocrImage = Get-ConfigurationValue $configuration "PADDLEOCR_IMAGE"
+        if ([string]::IsNullOrWhiteSpace($ocrImage)) {
+            throw "PADDLEOCR_IMAGE 설정이 없습니다."
+        }
+        $imageInspect = Invoke-DockerCapture -Arguments @("image", "inspect", "--format", "{{.Id}}", $ocrImage) -AllowFailure
+        if ($imageInspect.ExitCode -ne 0) {
+            throw "선택형 PaddleOCR 이미지가 없습니다: $ocrImage. ocr-build를 먼저 실행하거나 에어갭 번들을 가져오십시오."
+        }
+        Invoke-Compose @("--profile", "paddleocr", "up", "-d", "paddleocr-cpu")
+        Invoke-Compose @("--profile", "paddleocr", "ps", "paddleocr-cpu")
+    }
+    "paddleocr-stop" {
+        Invoke-Compose @("--profile", "paddleocr", "stop", "paddleocr-cpu")
+    }
+    "paddleocr-status" {
+        Invoke-Compose @("--profile", "paddleocr", "ps", "paddleocr-cpu")
+    }
+    "paddleocr-test" {
+        $container = Get-ComposeServiceContainerId "paddleocr-cpu"
+        if (-not $container) {
+            throw "PaddleOCR 컨테이너가 실행 중이 아닙니다. paddleocr-start를 먼저 실행하십시오."
+        }
+        $health = Invoke-DockerCapture -Arguments @("inspect", "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", $container) -AllowFailure
+        if ($health.ExitCode -ne 0 -or ($health.Lines -join "").Trim() -ne "healthy") {
+            throw "PaddleOCR 상태가 healthy가 아닙니다: $(($health.Lines -join '').Trim())"
+        }
+        Write-Host "PaddleOCR PP-OCRv5 CPU 서비스가 정상입니다."
     }
     "embedding-start" {
         Assert-FreeSpace
@@ -821,7 +943,7 @@ switch ($Action) {
             throw "PaddleOCR-VL pipeline 이미지가 CPU 전용이 아닙니다. paddleocr-vl-build를 다시 실행하십시오."
         }
         $pipelineCheck.Lines | ForEach-Object { Write-Host $_ }
-        Write-Host "PaddleOCR-VL 시작 구성: 일반 PP-OCRv5=CPU, VL 레이아웃=CPU, VL 0.9B VLM=GPU"
+        Write-Host "PaddleOCR-VL 시작 구성: VL 레이아웃=CPU, VL 0.9B VLM=GPU (일반 PP-OCRv5는 별도 선택 실행)"
         Write-Host "VLM 설정: GPU 비율 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_GPU_MEMORY_UTILIZATION' '0.60'), 컨텍스트 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_MODEL_LEN' '16384'), 배치 토큰 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS' '16384'), API 서버 $(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_API_SERVER_COUNT' '1')"
         $gpuCheck = Invoke-DockerCapture -Arguments @(
             "run", "--rm", "--gpus", "all", "--entrypoint", "nvidia-smi", $images[1],
@@ -843,7 +965,7 @@ switch ($Action) {
         Invoke-Compose @("--profile", "paddleocr-vl", "ps", "paddleocr-vl-vlm", "paddleocr-vl-api", "paddleocr-vl")
         $configuration = Get-EnvFileValues $ligEnvFile
         Write-Host ""
-        Write-Host "장치 배치: PP-OCRv5=CPU | VL 레이아웃=CPU | VL VLM=GPU"
+        Write-Host "장치 배치: VL 레이아웃=CPU | VL VLM=GPU | 일반 PP-OCRv5=별도 선택 실행"
         Write-Host "VLM 메모리 비율=$(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_GPU_MEMORY_UTILIZATION' '0.60'), 최대 배치 토큰=$(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS' '16384'), 최대 시퀀스=$(Get-ConfigurationValue $configuration 'PADDLEOCR_VL_MAX_NUM_SEQS' '8')"
         $vlmContainer = Get-ComposeServiceContainerId "paddleocr-vl-vlm"
         Show-PaddleOcrVlGpuSummary $vlmContainer
@@ -910,11 +1032,16 @@ switch ($Action) {
         }
         Write-Host "Qwen3 embedding health and 1024-dimensional batch inference passed."
     }
-    "stop" { Invoke-Compose @("down") }
+    "stop" {
+        Invoke-Compose ($allServiceProfileArguments + @("down", "--remove-orphans"))
+    }
     "status" {
-        Invoke-Compose @("ps")
+        Invoke-Compose ($allServiceProfileArguments + @("ps", "--all"))
         Invoke-Docker @("system", "df")
     }
     "diagnostics" { Invoke-Diagnostics }
-    "logs" { Invoke-Compose @("logs", "--tail", "200") }
+    "recovery-test" { Invoke-RecoveryTest }
+    "logs" {
+        Invoke-Compose ($allServiceProfileArguments + @("logs", "--tail", "200"))
+    }
 }

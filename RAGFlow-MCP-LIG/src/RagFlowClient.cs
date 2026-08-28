@@ -20,18 +20,24 @@ public sealed class RagFlowClient
         {
             // Health checks must not depend on a tenant API key. In a fresh or
             // air-gapped installation the configured value can still be the
-            // bootstrap placeholder, which makes the authenticated status
-            // endpoint emit JWT warnings even though RAGFlow is ready.
-            using var request = new HttpRequestMessage(HttpMethod.Get, "api/v1/system/ping");
+            // bootstrap placeholder. The unauthenticated dependency health
+            // endpoint covers the database, queue, document engine and storage.
+            using var request = new HttpRequestMessage(HttpMethod.Get, "api/v1/system/healthz");
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
             var bytes = await ReadLimitedBytesAsync(response.Content, _settings.MaxTextResponseBytes);
-            var available = response.IsSuccessStatusCode
-                && string.Equals(Encoding.UTF8.GetString(bytes).Trim(), "pong", StringComparison.OrdinalIgnoreCase);
-            return BuildHealth(available, (int)response.StatusCode, available ? null : "RAGFlow ping check failed.");
+            var available = false;
+            if (response.IsSuccessStatusCode)
+            {
+                using var document = JsonDocument.Parse(bytes);
+                available = document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.TryGetProperty("status", out var status)
+                    && string.Equals(status.GetString(), "ok", StringComparison.Ordinal);
+            }
+            return BuildHealth(available, (int)response.StatusCode, available ? null : "RAGFlow dependency health check failed.");
         }
-        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or InvalidOperationException or JsonException)
         {
-            return BuildHealth(false, null, "RAGFlow is unreachable or returned an invalid ping response.");
+            return BuildHealth(false, null, "RAGFlow is unreachable or returned an invalid dependency health response.");
         }
     }
 
@@ -52,6 +58,91 @@ public sealed class RagFlowClient
     public Task<JsonElement> PutAsync(string path, object? body = null) => SendAsync(HttpMethod.Put, path, body);
     public Task<JsonElement> PatchAsync(string path, object? body = null) => SendAsync(HttpMethod.Patch, path, body);
     public Task<JsonElement> DeleteAsync(string path, object? body = null) => SendAsync(HttpMethod.Delete, path, body);
+
+    public async Task<JsonElement> GetProjectedCollectionAsync(string path, params string[] fields)
+    {
+        var response = await GetAsync(path);
+        if (response.ValueKind != JsonValueKind.Object
+            || !response.TryGetProperty("data", out var payload))
+            throw new InvalidOperationException("RAGFlow collection response does not contain data.");
+
+        JsonElement data;
+        JsonElement totalValue;
+        if (payload.ValueKind == JsonValueKind.Array)
+        {
+            data = payload;
+            response.TryGetProperty("total", out totalValue);
+        }
+        else if (payload.ValueKind == JsonValueKind.Object
+                 && payload.TryGetProperty("docs", out data)
+                 && data.ValueKind == JsonValueKind.Array)
+        {
+            payload.TryGetProperty("total", out totalValue);
+        }
+        else
+        {
+            throw new InvalidOperationException("RAGFlow collection response does not contain a supported array.");
+        }
+
+        var rows = new List<Dictionary<string, JsonElement>>();
+        foreach (var item in data.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            var row = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var field in fields)
+            {
+                if (item.TryGetProperty(field, out var value)) row[field] = value.Clone();
+            }
+            rows.Add(row);
+        }
+        var total = totalValue.ValueKind == JsonValueKind.Number && totalValue.TryGetInt64(out var count)
+            ? count
+            : rows.Count;
+        return JsonSerializer.SerializeToElement(new { total, data = rows }, JsonOptions);
+    }
+
+    public async Task<JsonElement> GetDocumentStageTimingsAsync(string datasetId, string documentId)
+    {
+        var escapedDatasetId = Uri.EscapeDataString(datasetId);
+        var escapedDocumentId = Uri.EscapeDataString(documentId);
+        var documentResponse = await GetAsync(
+            $"api/v1/datasets/{escapedDatasetId}/documents?id={escapedDocumentId}&page=1&page_size=1");
+        if (!documentResponse.TryGetProperty("data", out var documentData)
+            || documentData.ValueKind != JsonValueKind.Object
+            || !documentData.TryGetProperty("docs", out var documents)
+            || documents.ValueKind != JsonValueKind.Array
+            || documents.GetArrayLength() != 1
+            || !documents[0].TryGetProperty("name", out var nameValue))
+            throw new InvalidOperationException("RAGFlow did not return the requested document.");
+
+        var name = nameValue.GetString() ?? string.Empty;
+        var logResponse = await GetAsync(
+            $"api/v1/datasets/{escapedDatasetId}/ingestions?log_type=file&page=1&page_size=100&orderby=create_time&desc=true&keywords={Uri.EscapeDataString(name)}");
+        if (!logResponse.TryGetProperty("data", out var ingestionData)
+            || ingestionData.ValueKind != JsonValueKind.Object
+            || !ingestionData.TryGetProperty("logs", out var logs)
+            || logs.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("RAGFlow ingestion response does not contain a logs array.");
+
+        string[] fields = [
+            "id", "document_id", "document_name", "parser_id", "task_type",
+            "operation_status", "progress", "process_begin_at", "process_duration",
+            "create_time", "update_time"
+        ];
+        var rows = new List<Dictionary<string, JsonElement>>();
+        foreach (var item in logs.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("document_id", out var itemDocumentId)
+                || !string.Equals(itemDocumentId.GetString(), documentId, StringComparison.Ordinal))
+                continue;
+            var row = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var field in fields)
+                if (item.TryGetProperty(field, out var value)) row[field] = value.Clone();
+            rows.Add(row);
+        }
+        return JsonSerializer.SerializeToElement(new { total = rows.Count, data = rows }, JsonOptions);
+    }
 
     public Task<JsonElement> RequestAsync(string method, string relativePath, string? bodyJson = null)
     {

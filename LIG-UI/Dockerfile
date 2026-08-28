@@ -37,6 +37,7 @@ FROM ${RAGFLOW_BASE_IMAGE}
 
 USER root
 COPY LIG-Runtime/apply-runtime-patches.py /tmp/apply-lig-runtime-patches.py
+COPY LIG-Runtime/runtime_patches/ /tmp/runtime_patches/
 COPY LIG-Runtime/lig_runtime/ /ragflow/lig_runtime/
 RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/rag/llm/embedding_model.py \

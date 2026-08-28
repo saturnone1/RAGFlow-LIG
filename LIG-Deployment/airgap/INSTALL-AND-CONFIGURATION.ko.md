@@ -62,6 +62,7 @@ CPU·GPU 설치 모두 한국어 PP-OCRv5 `CPUExecutionProvider`를 사용합니
 .\status.ps1
 .\diagnostics.ps1
 .\diagnostics-gpu.ps1
+.\recovery-test.ps1
 .\logs.ps1
 ```
 
@@ -70,10 +71,15 @@ CPU·GPU 설치 모두 한국어 PP-OCRv5 `CPUExecutionProvider`를 사용합니
 - `install-embedding-cpu.ps1`: 별도 Qwen3 이미지 아카이브를 검증·로드하고 CPU 임베딩 서비스 시작
 - `start-embedding-cpu.ps1` / `stop-embedding.ps1`: 선택형 임베딩 서비스만 시작 또는 중지
 - `test-embedding.ps1`: health와 한국어·영어 1024차원 배치 추론 검증
-- `stop.ps1`: 컨테이너와 네트워크만 중지·제거하며 문서 데이터는 삭제하지 않음
+- `start-paddleocr.ps1` / `stop-paddleocr.ps1`: 선택형 일반 PP-OCRv5 CPU 서비스만 시작 또는 중지
+- `test-paddleocr.ps1`: 일반 PaddleOCR 컨테이너 health 검증
+- `stop.ps1`: 기본 서비스와 선택 실행한 PaddleOCR·PaddleOCR-VL·embedding 컨테이너 및 네트워크를 모두 중지·제거하며 문서 데이터는 삭제하지 않음
 - `status.ps1`: 컨테이너와 Docker 디스크 사용량 확인
-- `diagnostics.ps1`: health, 현재 task executor, 자원 사용량, 최근 처리시간과 오류를 JSON으로 출력
+- `diagnostics.ps1`: 의존성 health, Redis 큐 길이·pending·lag, 현재 task executor, 자원 사용량, 최근 처리시간과 오류를 JSON으로 출력
 - `diagnostics-gpu.ps1`: GPU 프로필을 기준으로 같은 진단 실행
+- `recovery-test.ps1`: one-shot DB migration 상태를 확인하고 worker·Infinity 재시작 복구와 API health를 시험. 실행 중 처리는 잠시 중단됨
+- `backup.ps1`: 서비스를 정지해 네 named volume과 환경 파일을 같은 시점으로 백업하고 SHA-256 manifest 생성
+- `restore.ps1`: manifest를 먼저 검증한 뒤 `-ConfirmRestore`가 있을 때만 기존 볼륨 내용을 복원
 - `logs.ps1`: 최근 컨테이너 로그 출력
 - 한국어 PaddleOCR 상태: `http://127.0.0.1:42316/health`
 
@@ -186,7 +192,7 @@ DeepDoc/PaddleOCR-VL GPU와 이 embedding 서비스는 별개입니다. Qwen3와
 
 1. 데이터셋 기본 설정의 언어를 `Korean`으로 지정합니다.
 2. 텍스트 선택과 복사가 정상인 PDF는 PDF 파서 `Plain Text`를 사용합니다.
-3. 스캔 PDF나 글꼴 매핑이 깨진 PDF는 청킹 `Naive`, PDF 파서 `paddleocr-from-env`를 선택합니다. 이 파서는 PDF를 기본 40쪽 단위로 나누되 각 작업 범위의 페이지만 OCR 서비스에 보내므로 전체 원본을 작업마다 반복 처리하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되므로 별도로 입력하지 않습니다.
+3. 스캔 PDF나 글꼴 매핑이 깨진 PDF는 `start-paddleocr.ps1`을 먼저 실행하고 청킹 `Naive`, PDF 파서 `paddleocr-from-env`를 선택합니다. 이 파서는 PDF를 기본 40쪽 단위로 나누되 각 작업 범위의 페이지만 OCR 서비스에 보내므로 전체 원본을 작업마다 반복 처리하지 않습니다. 내부 API URL, 토큰과 `PP-OCRv5`는 자동 적용되므로 별도로 입력하지 않습니다.
 4. 파서를 바꾼 뒤 기존의 잘못된 청크를 삭제하고 문서를 다시 처리합니다.
 
 DeepDOC는 영어·중국어 문서와 표·레이아웃·좌표 처리용으로 유지합니다. PaddleOCR 한국어 모델은 한국어·영어·숫자 인식에 집중하므로 모든 문서에 대한 무조건적인 대체재는 아닙니다.
@@ -209,7 +215,7 @@ PDF_TASK_PAGE_SIZE=40
 ADAPTIVE_PDF_TASK_PAGE_SIZE=false
 ```
 
-API와 task executor는 별도 컨테이너입니다. CPU/PaddleOCR 기본 구성은 task executor 3개가 각각 task/parser 하나를 받아 PDF의 40쪽 범위 작업을 총 3개까지 병렬 처리합니다. `MAX_CONCURRENT_TASKS`와 `MAX_CONCURRENT_CHUNK_BUILDERS`는 worker당 값이므로 worker와 함께 모두 3으로 설정하면 최대 9개 파서가 열립니다. 데이터셋의 `task_page_size`가 `PDF_TASK_PAGE_SIZE`보다 우선합니다. 이 공통값은 DeepDOC, Plain Text, Docling 등 페이지 분할이 가능한 PDF 파서에 적용되고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE=40` 전송 상한이 추가 적용됩니다. `ADAPTIVE_PDF_TASK_PAGE_SIZE=false`가 기본이므로 메모리에 따라 40쪽이 더 작게 바뀌지 않습니다. 메모리 적응 축소가 필요한 장비에서만 이를 `true`로 변경합니다. `One`, 지식 그래프 및 목차 추출처럼 전체 문서 문맥이 필요한 모드는 분할하지 않습니다. 문서 크기·페이지 수 제한은 기본적으로 비활성화되어 있으므로 큰 문서는 느리더라도 계속 진행됩니다. 취소 신호를 받은 파서는 협력 중단하며, 네이티브 라이브러리나 외부 파서가 5초 이상 취소를 무시하면 API가 아니라 격리 task executor 프로세스만 자동 재기동합니다. 컨테이너 교체나 비정상 종료로 과거 consumer에 묶인 Redis pending은 기본 300초 유휴 후 현재 worker가 자동 인계하고, task lease를 확인한 뒤 종료 작업은 승인 처리하고 유효 작업은 이어서 수행합니다. 로컬 Qwen3 요청 제한시간은 300초이고 embedding batch는 4입니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
+API와 task executor는 별도 컨테이너입니다. 기본 구성은 task executor 3개가 각각 task/parser 하나를 받아 PDF의 40쪽 범위 작업을 총 3개까지 병렬 처리합니다. 일반 PaddleOCR은 별도 시작한 경우에만 같은 작업 구조를 사용합니다. `MAX_CONCURRENT_TASKS`와 `MAX_CONCURRENT_CHUNK_BUILDERS`는 worker당 값이므로 worker와 함께 모두 3으로 설정하면 최대 9개 파서가 열립니다. 데이터셋의 `task_page_size`가 `PDF_TASK_PAGE_SIZE`보다 우선합니다. 이 공통값은 DeepDOC, Plain Text, Docling 등 페이지 분할이 가능한 PDF 파서에 적용되고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE=40` 전송 상한이 추가 적용됩니다. `ADAPTIVE_PDF_TASK_PAGE_SIZE=false`가 기본이므로 메모리에 따라 40쪽이 더 작게 바뀌지 않습니다. 메모리 적응 축소가 필요한 장비에서만 이를 `true`로 변경합니다. `One`, 지식 그래프 및 목차 추출처럼 전체 문서 문맥이 필요한 모드는 분할하지 않습니다. 문서 크기·페이지 수 제한은 기본적으로 비활성화되어 있으므로 큰 문서는 느리더라도 계속 진행됩니다. 취소 신호를 받은 파서는 협력 중단하며, 네이티브 라이브러리나 외부 파서가 5초 이상 취소를 무시하면 API가 아니라 격리 task executor 프로세스만 자동 재기동합니다. 컨테이너 교체나 비정상 종료로 과거 consumer에 묶인 Redis pending은 기본 300초 유휴 후 현재 worker가 자동 인계하고, task lease를 확인한 뒤 종료 작업은 승인 처리하고 유효 작업은 이어서 수행합니다. 로컬 Qwen3 요청 제한시간은 300초이고 embedding batch는 4입니다. 값을 변경한 후 `stop.ps1`, `start.ps1` 순서로 적용합니다.
 
 GPU 설치·시작·진단 스크립트도 `.env.lig`의 `TASK_EXECUTOR_WORKERS`, `MAX_CONCURRENT_TASKS`, `MAX_CONCURRENT_CHUNK_BUILDERS`를 그대로 사용하며 별도 강제값을 적용하지 않습니다. DeepDOC는 worker마다 모델을 적재할 수 있으므로 GPU 메모리가 부족한 환경에서는 운영자가 `TASK_EXECUTOR_WORKERS=1`로 직접 낮춘 뒤 재시작하십시오.
 
@@ -235,17 +241,17 @@ pwsh LIG-Deployment/airgap-export.ps1 `
 .\test-paddleocr-vl.ps1
 ```
 
-데이터셋 설정에서 `PaddleOCR` PDF 파서를 고르면 일반 `paddleocr-from-env`가 표시되고, 선택 설치한 VL gateway의 health가 정상일 때만 `paddleocr-vl-from-env`도 표시됩니다. RAGFlow 내부 공급자 엔진 이름만 같고 URL·토큰·알고리즘·모델 인스턴스는 분리되어 있으므로 일반 OCR 설정을 덮어쓰지 않습니다. VL 모델이 바로 보이지 않으면 `paddleocr-vl-status`로 VLM·CPU pipeline·gateway 상태를 확인하십시오.
+데이터셋 설정에서 `PaddleOCR` PDF 파서를 고르면 `start-paddleocr.ps1`로 일반 서비스를 실행한 경우 `paddleocr-from-env`가 표시되고, 선택 설치한 VL gateway의 health가 정상일 때만 `paddleocr-vl-from-env`도 표시됩니다. RAGFlow 내부 공급자 엔진 이름만 같고 URL·토큰·알고리즘·모델 인스턴스는 분리되어 있으므로 일반 OCR 설정을 덮어쓰지 않습니다. VL 모델이 바로 보이지 않으면 `paddleocr-vl-status`로 VLM·CPU pipeline·gateway 상태를 확인하십시오.
 
 번들 Job API와 사내 원격 PaddleX 이미지 API는 모델 또는 데이터셋 설정의 PDF 렌더링 DPI를 작업별로 사용하며 기본값은 144입니다. MIL-STD-2525C 표본의 144/180/216/240/300 DPI 비교에서 144 DPI가 가장 높은 평균 단어 F1과 가장 낮은 픽셀 비용을 보였습니다. 작은 글자 누락이 확인된 스캔 문서만 216 DPI를 시험하십시오.
 
-12 GiB GPU 기본값은 일반 PP-OCRv5와 VL 레이아웃 검출을 CPU에서 실행하고 0.9B VLM만 PaddleOCR 계열 GPU 작업으로 실행합니다. vLLM은 eager 모드, GPU 비율 0.60, API server 1개, batch tokens 16,384로 시작합니다. 이 값은 모델 컨텍스트와 맞춘 안정적인 시작점입니다. `No available memory for the cache blocks`가 계속되면 `paddleocr-vl-status`에서 여유 VRAM과 최근 오류를 확인하고 다른 DeepDOC 작업을 중지한 뒤 GPU 비율을 0.05씩 올려 시험하십시오. 너무 높이면 DeepDOC가 사용할 VRAM이 사라지므로 측정 없이 크게 올리지 마십시오.
+12 GiB GPU 기본값은 선택 실행한 일반 PP-OCRv5와 VL 레이아웃 검출을 CPU에서 처리하고 0.9B VLM만 PaddleOCR 계열 GPU 작업으로 실행합니다. vLLM은 eager 모드, GPU 비율 0.60, API server 1개, batch tokens 16,384로 시작합니다. 이 값은 모델 컨텍스트와 맞춘 안정적인 시작점입니다. `No available memory for the cache blocks`가 계속되면 `paddleocr-vl-status`에서 여유 VRAM과 최근 오류를 확인하고 다른 DeepDOC 작업을 중지한 뒤 GPU 비율을 0.05씩 올려 시험하십시오. 너무 높이면 DeepDOC가 사용할 VRAM이 사라지므로 측정 없이 크게 올리지 마십시오.
 
 장치 배치는 다음과 같습니다.
 
 | 서비스 | 장치 | 비고 |
 | --- | --- | --- |
-| 일반 `paddleocr-from-env` | CPU | 한국어 PP-OCRv5, 항상 실행 |
+| 일반 `paddleocr-from-env` | CPU | 한국어 PP-OCRv5, `start-paddleocr.ps1`로 선택 실행 |
 | VL 레이아웃 pipeline | CPU | GPU 예약 없음 |
 | `paddleocr-vl-from-env`의 0.9B VLM | GPU | 선택 설치 |
 | DeepDOC | GPU 설치 시 GPU | VLM과 VRAM 공유 |
@@ -279,7 +285,20 @@ pwsh LIG-Deployment\lig-ragflow.ps1 paddleocr-vl-status
 
 ## 10. 데이터와 백업
 
-컨테이너를 다시 만들어도 문서와 인덱스는 Docker named volume에 유지됩니다. 중요한 운영 환경에서는 Docker Desktop 데이터 디스크와 다음 설정 파일을 정기적으로 백업합니다.
+컨테이너를 다시 만들어도 문서와 인덱스는 Docker named volume에 유지됩니다. 다음 명령은 서비스를 잠시 정지하여 MySQL·MinIO·Infinity·Redis를 같은 시점으로 보관하고, 파일별 SHA-256이 기록된 `manifest.json`을 만듭니다. 기본 대상은 바탕화면 `LIG-RAGFlow-Backups`이며 이전에 실행 중이던 선택 서비스도 다시 시작합니다.
+
+```powershell
+.\backup.ps1
+.\backup.ps1 -Destination "D:\RAGFlow-Backup\20260828"
+```
+
+복원은 기존 볼륨 내용을 교체하므로 명시적 확인이 필요합니다. 설정 파일까지 되돌릴 때만 `-RestoreConfiguration`을 추가합니다.
+
+```powershell
+.\restore.ps1 -Source "D:\RAGFlow-Backup\20260828" -ConfirmRestore
+```
+
+백업 폴더에는 다음 설정 파일도 포함됩니다.
 
 - `LIG-Deployment\.env.lig`
 - `LIG-Deployment\.env.secret` — 별도 암호화 보관
@@ -301,7 +320,7 @@ RAGFLOW_IMAGE=infiniflow/ragflow:v0.26.4
 
 ## 12. 사내 운영 전 필수 변경
 
-기본 번들은 단일 PC에서 안전하게 시험하도록 모든 포트를 `127.0.0.1`에 바인딩하고 회원가입을 허용합니다. 여러 사내 사용자가 접속하는 운영 서버에서는 다음 항목을 별도로 확정해야 합니다.
+기본 번들은 UI·API·MCP를 사내망에서 접속할 수 있도록 `0.0.0.0`에, DB·Redis·MinIO·Infinity와 OCR 상태 포트는 `127.0.0.1`에 바인딩하고 회원가입을 허용합니다. 여러 사내 사용자가 접속하는 운영 서버에서는 다음 항목을 별도로 확정해야 합니다.
 
 - 리버스 프록시와 사내 TLS 인증서 적용
 - 웹/API 공개 주소를 서버 IP로 변경하고 필요한 포트만 방화벽에서 허용

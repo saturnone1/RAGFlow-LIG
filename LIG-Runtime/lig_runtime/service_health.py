@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import sys
@@ -9,9 +10,12 @@ from urllib.request import urlopen
 
 def api_ready(base_url: str) -> bool:
     try:
-        with urlopen(f"{base_url.rstrip('/')}/api/v1/system/ping", timeout=10) as response:
-            return response.status == 200 and response.read(16).strip() == b"pong"
-    except (URLError, TimeoutError, OSError):
+        with urlopen(f"{base_url.rstrip('/')}/api/v1/system/healthz", timeout=10) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read(65536))
+            return isinstance(payload, dict) and payload.get("status") == "ok"
+    except (URLError, TimeoutError, OSError, ValueError):
         return False
 
 

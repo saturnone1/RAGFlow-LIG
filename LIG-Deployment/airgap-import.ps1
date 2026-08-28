@@ -138,7 +138,7 @@ if ($Device -eq "gpu") {
     } catch {
         throw "The GPU is visible, but DeepDoc could not create a CUDA ONNX session. Check the NVIDIA driver and CUDA 12/cuDNN 9 compatibility."
     }
-    Write-Host "DeepDOC CUDA 검증을 통과했습니다. 일반 PP-OCRv5는 GPU 설치에서도 CPU 서비스를 사용합니다."
+    Write-Host "DeepDOC CUDA 검증을 통과했습니다. 일반 PP-OCRv5가 필요하면 GPU 설치에서도 별도 CPU 서비스를 선택 실행하십시오."
 }
 
 $secretFile = Join-Path $PSScriptRoot ".env.secret"

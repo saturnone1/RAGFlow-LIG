@@ -7,7 +7,7 @@
 - 문서 엔진: Elasticsearch 대신 Infinity
 - 실행 장치: 로컬 기본 CPU, 에어갭 번들은 NVIDIA DeepDoc GPU 설치도 지원
 - GPU 런타임: DeepDOC용 CUDA 12.8·cuDNN 9 RAGFlow 이미지와 선택형 PaddleOCR-VL VLM
-- 한국어 OCR: CPU·GPU 설치 모두 `korean_PP-OCRv5_mobile_rec` 모델을 포함한 CPU PaddleOCR 서비스 자동 실행
+- 한국어 OCR: `korean_PP-OCRv5_mobile_rec` 모델을 포함한 CPU PaddleOCR 서비스 선택 실행
 - 내부 서비스: RAGFlow, 한국어 PaddleOCR, LIG 관리 MCP, Infinity, MySQL, MinIO, Valkey
 - 온라인 임베딩 선택지: NVIDIA 공개 API의 `nvidia/llama-nemotron-embed-vl-1b-v2`
 - 선택 설치 임베딩: TEI CPU 기반 `Qwen/Qwen3-Embedding-0.6B`(1024차원, 모델과 런타임을 별도 에어갭 아카이브에 포함)
@@ -97,13 +97,23 @@ RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Ba
 ```powershell
 .\lig-ragflow.ps1 status
 .\lig-ragflow.ps1 diagnostics
+.\lig-ragflow.ps1 recovery-test
 .\lig-ragflow.ps1 logs
 ```
 
-`diagnostics`는 비밀값을 출력하지 않고 UI·API·두 MCP의 정확한 주소와 MCP initialize 결과, Compose 서비스 상태, Infinity·MinIO·MySQL·Valkey 상태, task executor heartbeat, 컨테이너 CPU·메모리·I/O 스냅숏, 최근 문서 처리 소요시간 로그와 오류를 JSON으로 출력합니다. heartbeat의 `GroupPending`은 consumer group 전체의 미승인 작업 수이고 `GroupLag`는 아직 어느 worker에도 전달되지 않은 작업 수입니다. 최근 30분 이내 종료된 컨테이너도 남을 수 있으므로 `CurrentContainer=true`와 `CurrentTaskExecutorHeartbeatCount`를 현재 worker 수 기준으로 사용합니다. 장애나 장시간 처리 분석 시 결과를 파일로 보관할 수 있습니다.
+`diagnostics`는 비밀값을 출력하지 않고 UI·API·두 MCP의 정확한 주소와 MCP initialize 결과, Compose 서비스 상태, 의존성 health, Redis stream의 길이·pending·lag·consumer 수, task executor heartbeat, 컨테이너 CPU·메모리·I/O 스냅숏, 최근 문서 처리 소요시간과 오류를 JSON으로 출력합니다. heartbeat의 `GroupPending`은 consumer group 전체의 미승인 작업 수이고 `GroupLag`는 아직 어느 worker에도 전달되지 않은 작업 수입니다. 최근 30분 이내 종료된 컨테이너도 남을 수 있으므로 `CurrentContainer=true`와 `CurrentTaskExecutorHeartbeatCount`를 현재 worker 수 기준으로 사용합니다. 장애나 장시간 처리 분석 시 결과를 파일로 보관할 수 있습니다.
+
+시작할 때 `ragflow-migrate`가 DB 초기화와 모델 공급자 마이그레이션을 한 번만 수행하고 성공한 뒤 API와 worker가 시작됩니다. 각 컨테이너가 동시에 스키마를 변경하지 않습니다. `recovery-test`는 운영자가 명시적으로 실행할 때만 worker와 Infinity를 순서대로 재시작하고 migration 종료 코드와 API 의존성 상태를 확인하므로 실행 중 처리가 잠시 멈춥니다.
 
 ```powershell
 .\lig-ragflow.ps1 diagnostics > diagnostics.json
+```
+
+일관된 named volume 백업과 무결성 검증 복원은 다음 스크립트를 사용합니다. 백업은 서비스를 잠시 정지한 뒤 MySQL·MinIO·Infinity·Redis를 같은 시점으로 보관하고, 기존에 실행 중이던 선택 서비스도 다시 시작합니다. 백업에는 `.env.secret`이 포함될 수 있으므로 암호화 저장소에 보관합니다.
+
+```powershell
+.\backup-ragflow.ps1
+.\restore-ragflow.ps1 -Source "C:\Backup\20260828-120000" -ConfirmRestore
 ```
 
 ## 문서 처리 구조와 튜닝
@@ -117,9 +127,11 @@ RAGFlow에는 공급자 `HuggingFace`, 모델명 `Qwen/Qwen3-Embedding-0.6B`, Ba
        → 내장 DeepDoc 파서/OCR → 청킹 → 외부 임베딩 → Infinity 인덱싱
 ```
 
+데이터셋 설정 저장은 DB의 데이터셋 값과 기존 문서가 소유한 파서 설정을 한 트랜잭션으로 갱신합니다. UI는 저장 완료 후 서버 값을 다시 읽은 뒤 `모든 worker에 반영됨`을 표시합니다. 임베딩 모델·청킹 방식·파서 설정을 바꾸고 이미 처리된 문서가 있으면 저장과 별개로 기존 문서 재처리가 필요하다고 표시하며, PaddleOCR 계열을 선택하면 해당 선택 서비스가 실행 중이어야 함을 함께 안내합니다.
+
 upstream Compose의 `deepdoc` 서비스는 선택 프로파일입니다. 현재 LIG 기본 프로파일에는 포함하지 않으며, task executor 프로세스가 RAGFlow 이미지 안의 DeepDoc 모듈을 직접 호출합니다. `DEEPDOC_URL`을 사용한 독립 서비스 운영을 검증하지 않은 상태에서 `deepdoc` 프로파일만 켜도 ingestion이 자동 분리되지는 않습니다.
 
-한국어 스캔 PDF에는 CPU·GPU 설치 모두 동일한 `paddleocr-cpu` 서비스가 자동 실행됩니다. 일반 PP-OCRv5가 GPU 메모리를 점유하지 않으므로 선택형 PaddleOCR-VL VLM과 동시에 사용할 때 VRAM 경합이 줄어듭니다. 한국어·영어·숫자를 지원하는 모델은 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하십시오. RAGFlow는 PDF를 데이터셋의 `task_page_size` 또는 전역 `PDF_TASK_PAGE_SIZE` 단위로 나누고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE` 상한을 추가 적용합니다. 각 작업은 해당 페이지만 새 PDF로 구성해 OCR 서비스에 전송하므로 전체 원본을 작업마다 반복 처리하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
+한국어 스캔 PDF용 `paddleocr-cpu`는 임베딩 서비스처럼 선택 실행합니다. 기본 `start`에는 포함되지 않으며 필요할 때 `paddleocr-start`, 확인은 `paddleocr-test`, 중지는 `paddleocr-stop`을 사용합니다. 일반 PP-OCRv5는 CPU에서만 실행되어 선택형 PaddleOCR-VL VLM과 VRAM을 다투지 않습니다. 한국어·영어·숫자를 지원하는 모델은 이미지에 선탑재하므로 에어갭에서도 추가 다운로드가 없습니다. 업로드 원본과 페이지별 JSONL 결과는 임시 디스크에 순차 기록하고 작업 만료 후 삭제하므로 대형 PDF 전체를 Python 메모리에 유지하지 않습니다. 데이터셋 언어를 `Korean`, 청킹 방식을 `Naive`, PDF 파서를 `paddleocr-from-env`로 선택하기 전에 서비스를 시작하십시오. RAGFlow는 PDF를 데이터셋의 `task_page_size` 또는 전역 `PDF_TASK_PAGE_SIZE` 단위로 나누고, PaddleOCR에는 `PADDLEOCR_TASK_PAGE_SIZE` 상한을 추가 적용합니다. 각 작업은 해당 페이지만 새 PDF로 구성해 OCR 서비스에 전송하므로 전체 원본을 작업마다 반복 처리하지 않습니다. 텍스트 선택과 복사가 정상인 PDF는 OCR 없이 `Plain Text`가 더 빠르고 정확합니다.
 
 **파일 열기 암호**를 설정한 PDF, Word(`.docx`/`.doc`), Excel(`.xlsx`/`.xls`), PowerPoint(`.pptx`/`.ppt`) 및 HWPX는 업로드 창에서 파일별 비밀번호를 입력할 수 있습니다. 업로드 단계에서 암호를 검증한 뒤 원본 암호화 문서는 그대로 저장하고, 비밀번호는 `.env.secret`의 `LIG_DOCUMENT_PASSWORD_KEY`로 AES-256-GCM 암호화해 문서 설정에 보관합니다. 작업자는 파싱 직전에 메모리에서 문서를 복호화해 기존 파서로 전달합니다. HWPX는 한컴의 AES-256-CBC/PBKDF2 형식을 복호화하고 XML 본문을 텍스트로 변환하며, 일반 HWP 5와 HWPX도 텍스트 문서로 처리합니다. 잘못된 암호는 업로드 오류로 바로 표시되며, 문서의 청킹 방식 설정에서 새 암호를 저장하고 재실행할 수도 있습니다.
 
@@ -142,7 +154,7 @@ pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-start
 pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-test
 ```
 
-RAGFlow의 **데이터셋 설정 → PDF 파서**에서 `PaddleOCR`를 고르면 모델 목록에 `paddleocr-from-env`와 `paddleocr-vl-from-env`가 각각 표시됩니다. 일반 한국어 OCR은 `paddleocr-from-env`, 복잡한 표·수식·차트·레이아웃과 다국어 문서는 `paddleocr-vl-from-env`를 선택하십시오. 둘은 RAGFlow가 지원하는 같은 `PaddleOCR` 공급자 엔진을 사용하지만 모델 인스턴스, 내부 URL, Bearer 토큰과 알고리즘은 서로 분리되어 있습니다. 설정 화면에서 공급자를 수동으로 다시 추가할 필요가 없습니다. 기존 설치는 컨테이너를 새 이미지로 재생성한 뒤 최대 30초 안에 누락된 VL 인스턴스를 자동 생성합니다.
+RAGFlow의 **데이터셋 설정 → PDF 파서**에서 `PaddleOCR`를 고르면 실행 중인 선택 서비스에 따라 `paddleocr-from-env`와 `paddleocr-vl-from-env`가 각각 표시됩니다. 일반 한국어 OCR은 `paddleocr-start` 후 `paddleocr-from-env`, 복잡한 표·수식·차트·레이아웃과 다국어 문서는 `paddleocr-vl-start` 후 `paddleocr-vl-from-env`를 선택하십시오. 둘은 RAGFlow가 지원하는 같은 `PaddleOCR` 공급자 엔진을 사용하지만 모델 인스턴스, 내부 URL, Bearer 토큰과 알고리즘은 서로 분리되어 있습니다. 설정 화면에서 공급자를 수동으로 다시 추가할 필요가 없습니다. 기존 설치는 컨테이너를 새 이미지로 재생성한 뒤 최대 30초 안에 실행 중인 프로파일 인스턴스를 자동 생성하거나 활성화합니다.
 
 상태 확인과 중지는 다음과 같습니다.
 
@@ -155,7 +167,7 @@ pwsh LIG-Deployment/lig-ragflow.ps1 paddleocr-vl-stop
 
 12 GiB GPU용 VL 기본값은 일반 PP-OCRv5와 레이아웃 파이프라인을 CPU에서 실행하고 0.9B VLM만 GPU에서 실행합니다. DeepDOC도 GPU를 사용하므로 두 GPU 경로를 동시에 처리하면 VRAM 경합이 생길 수 있습니다. 공식 이미지의 vLLM 기본값 대신 `gpu-memory-utilization=0.60`, eager 모드, API server 1개, 최대 batch tokens 16,384를 적용해 `No available memory for the cache blocks` 기동 실패와 불필요한 CUDA graph/대형 배치 예약을 줄입니다. `PADDLEOCR_VL_GPU_MEMORY_UTILIZATION`이 너무 낮으면 cache block을 만들 수 없고 너무 높으면 DeepDOC가 사용할 VRAM이 줄어듭니다. `paddleocr-vl-status`는 현재 VRAM과 최근 KV cache/OOM 오류를 함께 표시합니다.
 
-API와 문서 작업기는 별도 컨테이너로 실행됩니다. 문서 작업기가 재시작되어도 웹/API와 데이터베이스가 함께 내려가지 않으며, 동일 작업에는 Redis lease를 사용해 중복 OCR을 막습니다. CPU/PaddleOCR 기본값은 worker 3개와 worker당 task/parser 슬롯 1개이므로 페이지 범위 작업을 총 3개까지 병렬 처리합니다. `TASK_EXECUTOR_WORKERS=3`, `MAX_CONCURRENT_TASKS=3`, `MAX_CONCURRENT_CHUNK_BUILDERS=3`으로 모두 올리면 총 3개가 아니라 최대 9개 파서가 열리므로 그렇게 설정하지 마십시오. worker마다 파서 모델 메모리가 중복됩니다.
+API와 문서 작업기는 별도 컨테이너로 실행됩니다. 문서 작업기가 재시작되어도 웹/API와 데이터베이스가 함께 내려가지 않으며, 동일 작업에는 Redis lease를 사용해 중복 OCR을 막습니다. 기본값은 worker 3개와 worker당 task/parser 슬롯 1개이므로 페이지 범위 작업을 총 3개까지 병렬 처리하며, 선택 실행한 PaddleOCR도 이 구조를 사용합니다. `TASK_EXECUTOR_WORKERS=3`, `MAX_CONCURRENT_TASKS=3`, `MAX_CONCURRENT_CHUNK_BUILDERS=3`으로 모두 올리면 총 3개가 아니라 최대 9개 파서가 열리므로 그렇게 설정하지 마십시오. worker마다 파서 모델 메모리가 중복됩니다.
 
 선택형 Qwen3 TEI CPU 서비스는 현재 설정에서 유휴 메모리 약 1.5 GiB를 추가로 사용합니다. Docker VM 메모리가 부족하면 `TASK_EXECUTOR_WORKERS=1`로 낮추거나 임베딩 서비스를 별도 서버에서 운영하십시오. Compose는 시스템 RAM 상한을 강제로 설정하지 않습니다.
 

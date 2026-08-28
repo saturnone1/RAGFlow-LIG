@@ -11,6 +11,13 @@ RAGFlow에 포함된 공식 MCP는 검색과 조회에 집중합니다. 이 관�
 
 ## 제공 도구
 
+대규모 운영 화면이나 에이전트가 전체 설정·로그를 매번 받지 않도록 다음 경량 조회 도구를 우선 사용합니다.
+
+- `list_rag_flow_dataset_summaries`: 데이터셋 이름과 문서·청크·토큰 수만 페이지 조회
+- `get_rag_flow_dataset_processing_status`: 한 데이터셋의 문서 처리 상태와 진행률 조회
+- `list_recent_failed_rag_flow_documents`: 최근 실패 문서와 짧은 오류 상태 조회
+- `get_rag_flow_document_stage_timing`: 한 문서의 단계별 처리 시간 조회
+
 - `rag_flow_config`: 연결 상태와 쓰기 허용 여부 확인
 - `list_rag_flow_datasets`, `create_rag_flow_dataset`, `update_rag_flow_dataset`, `delete_rag_flow_dataset`
 - `list_rag_flow_documents`, `upload_rag_flow_document`, `update_rag_flow_document`, `delete_rag_flow_documents`
@@ -115,7 +122,7 @@ Compose 관리 MCP를 사용하는 클라이언트에는 `http://127.0.0.1:42306
 
 ## 검증
 
-조회 연결, 19개 도구 노출, MCP 무인증 요청 차단, API 카탈로그, 범용 시스템 버전·모델 API 호출, 다운로드 크기와 JSON 성공 코드를 확인합니다.
+조회 연결, 23개 도구 노출, MCP 무인증 요청 차단, API 카탈로그, 범용 시스템 버전·모델 API 호출, 다운로드 크기와 JSON 성공 코드를 확인합니다.
 
 ```powershell
 $env:RAGFLOW_API_KEY='ragflow-...'

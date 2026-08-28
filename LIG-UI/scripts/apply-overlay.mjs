@@ -33,6 +33,7 @@ const expectedHashes = {
   'src/interfaces/request/document.ts': '99cff0a70f4d815e6f7bcbae3711f81d7704b8f96bd8775c8e1f644aff345cc0',
   'src/pages/dataset/process-log-modal.tsx': 'd140832272a8d204e8da8e70ec1f05949f901d3795ef3fda57a9000b01552cc6',
   'src/hooks/use-knowledge-request.ts': '5a43702ec53f713e86f1f087ee638d2fd42c8acad0ae17cf1a881b6c41487fdc',
+  'src/hooks/use-llm-request.tsx': 'da875698d419f92f02c86ee6e62e1e016928a1c1c8db5e2a5c51cc5d328a3e1c',
   'src/pages/user-setting/setting-model/modal/provider-modal/field-config/provider-config-map.ts':
     'abfef8b4daf93d05306c86ecb856eb49c2944ce25378fa539a691c32e5644f8e',
 };
@@ -64,6 +65,15 @@ function replaceOnce(content, before, after, label) {
     throw new Error(`Expected exactly one match while applying ${label}`);
   }
   return content.slice(0, first) + after + content.slice(first + before.length);
+}
+
+function replaceSuffix(content, before, after, label) {
+  const trailingNewline = content.endsWith('\n') ? '\n' : '';
+  const body = trailingNewline ? content.slice(0, -1) : content;
+  if (!body.endsWith(before)) {
+    throw new Error(`Expected suffix while applying ${label}`);
+  }
+  return body.slice(0, -before.length) + after + trailingNewline;
 }
 
 let content = read('src/main.tsx');
@@ -137,6 +147,119 @@ content = replaceOnce(
   'show dataset saved message after refresh',
 );
 write('src/hooks/use-knowledge-request.ts', content);
+
+content = read('src/pages/dataset/dataset-setting/saving-button.tsx');
+content = replaceOnce(
+  content,
+  "import { useMemo } from 'react';",
+  "import { useMemo, useState } from 'react';\nimport { useHasParsedDocument } from './hooks';",
+  'dataset save status imports',
+);
+content = replaceOnce(
+  content,
+  `  const { t } = useTranslation();
+
+  return (
+    <ButtonLoading
+      loading={submitLoading}
+      data-testid="ds-settings-page-save-btn"`,
+  `  const { t } = useTranslation();
+  const hasParsedDocument = useHasParsedDocument();
+  const [saveOutcome, setSaveOutcome] = useState<'applied' | 'reprocess' | null>(null);
+  const dirtyFields = form.formState.dirtyFields;
+  const hasUnsavedChanges = form.formState.isDirty;
+  const requiresReprocessing =
+    hasParsedDocument &&
+    Boolean(
+      dirtyFields.embedding_model ||
+        dirtyFields.chunk_method ||
+        dirtyFields.pipeline_id ||
+        dirtyFields.parser_config,
+    );
+  const layoutRecognize = String(
+    form.watch('parser_config.layout_recognize') ?? '',
+  ).toLowerCase();
+  const usesPaddleOcr = layoutRecognize.startsWith('paddleocr');
+
+  return (
+    <>
+      <div className="mr-auto text-xs text-text-secondary">
+        {!hasUnsavedChanges && saveOutcome === 'applied' &&
+          t('knowledgeConfiguration.ligSettingsApplied')}
+        {!hasUnsavedChanges && saveOutcome === 'reprocess' &&
+          t('knowledgeConfiguration.ligReprocessRequired')}
+        {hasUnsavedChanges && requiresReprocessing &&
+          t('knowledgeConfiguration.ligWillRequireReprocess')}
+        {usesPaddleOcr && (
+          <span className="ml-2">
+            {t('knowledgeConfiguration.ligPaddleServiceRequired')}
+          </span>
+        )}
+      </div>
+      <ButtonLoading
+        loading={submitLoading}
+        data-testid="ds-settings-page-save-btn"`,
+  'dataset save status panel',
+);
+content = replaceOnce(
+  content,
+  '                await saveKnowledgeConfiguration({',
+  '                const result = await saveKnowledgeConfiguration({',
+  'capture dataset save result',
+);
+content = replaceOnce(
+  content,
+  `                  },
+                });
+              })();`,
+  `                  },
+                });
+                if (result.code === 0) {
+                  setSaveOutcome(requiresReprocessing ? 'reprocess' : 'applied');
+                }
+              })();`,
+  'show effective dataset save result',
+);
+content = replaceSuffix(
+  content,
+  `      {t('knowledgeConfiguration.save')}
+    </ButtonLoading>
+  );
+}`,
+  `      {t('knowledgeConfiguration.save')}
+      </ButtonLoading>
+    </>
+  );
+}`,
+  'close dataset save status panel',
+);
+write('src/pages/dataset/dataset-setting/saving-button.tsx', content);
+
+content = read('src/hooks/use-llm-request.tsx');
+content = replaceOnce(
+  content,
+  `        queryClient.invalidateQueries({
+          queryKey: LlmKeys.instanceModels(
+            params.provider_name,
+            params.instance_name,
+          ),
+        });
+      }
+      return data;`,
+  `        queryClient.invalidateQueries({
+          queryKey: LlmKeys.instanceModels(
+            params.provider_name,
+            params.instance_name,
+          ),
+        });
+        queryClient.invalidateQueries({
+          queryKey: LlmKeys.allModels(),
+        });
+      }
+      return data;`,
+  'refresh all model selectors after model status change',
+);
+write('src/hooks/use-llm-request.tsx', content);
 
 content = read(
   'src/pages/user-setting/setting-model/modal/provider-modal/field-config/provider-config-map.ts',
@@ -709,6 +832,10 @@ for (const [localePath, values] of [
     paddleWorkersMessage: 'Enter at least 1 concurrent image request',
     paddleDpi: 'PDF image resolution (DPI)',
     paddleDpiMessage: 'Enter a positive PDF image resolution',
+    settingsApplied: 'Saved and applied to all workers.',
+    reprocessRequired: 'Saved. Reprocess existing documents to apply vector or parser changes.',
+    willRequireReprocess: 'Existing documents will require reprocessing.',
+    paddleServiceRequired: 'The selected PaddleOCR service must be running.',
   }],
   ['src/locales/ko.ts', {
     label: '문서 비밀번호',
@@ -723,6 +850,10 @@ for (const [localePath, values] of [
     paddleWorkersMessage: '이미지 API 동시 요청 수를 1 이상 입력하세요',
     paddleDpi: 'PDF 이미지 해상도(DPI)',
     paddleDpiMessage: 'PDF 이미지 해상도를 1 이상 입력하세요',
+    settingsApplied: '저장되어 모든 worker에 반영됐습니다.',
+    reprocessRequired: '저장됐습니다. 벡터·파서 변경은 기존 문서를 다시 처리해야 적용됩니다.',
+    willRequireReprocess: '기존 문서는 저장 후 재처리가 필요합니다.',
+    paddleServiceRequired: '선택한 PaddleOCR 서비스가 실행 중이어야 합니다.',
   }],
 ]) {
   content = read(localePath);
@@ -730,7 +861,7 @@ for (const [localePath, values] of [
     content,
     "      parseOnCreation: " + (localePath.endsWith('/ko.ts') ? "'생성 시 파싱'," : "'Parse on creation',"),
     "      parseOnCreation: " + (localePath.endsWith('/ko.ts') ? "'생성 시 파싱'," : "'Parse on creation',") +
-      `\n      documentPasswords: '${values.label}',\n      documentPasswordsTip: '${values.tip}',\n      documentPassword: '${values.password}',\n      documentPasswordPlaceholder: '${values.placeholder}',\n      documentPasswordKeepPlaceholder: '${values.keep}',\n      documentPasswordUpdateTip: '${values.update}',\n      documentPasswordClear: '${values.clear}',`,
+      `\n      documentPasswords: '${values.label}',\n      documentPasswordsTip: '${values.tip}',\n      documentPassword: '${values.password}',\n      documentPasswordPlaceholder: '${values.placeholder}',\n      documentPasswordKeepPlaceholder: '${values.keep}',\n      documentPasswordUpdateTip: '${values.update}',\n      documentPasswordClear: '${values.clear}',\n      ligSettingsApplied: '${values.settingsApplied}',\n      ligReprocessRequired: '${values.reprocessRequired}',\n      ligWillRequireReprocess: '${values.willRequireReprocess}',\n      ligPaddleServiceRequired: '${values.paddleServiceRequired}',`,
     `document password ${localePath} locale`,
   );
   content = replaceOnce(

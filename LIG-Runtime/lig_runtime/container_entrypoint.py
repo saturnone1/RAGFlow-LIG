@@ -20,6 +20,7 @@ ROOT = Path("/ragflow")
 PYTHON = str(ROOT / ".venv/bin/python")
 STOP = threading.Event()
 CHILDREN: list[subprocess.Popen] = []
+CHILDREN_LOCK = threading.Lock()
 
 
 def render_configuration() -> None:
@@ -43,13 +44,9 @@ def ensure_docling() -> None:
     if os.environ.get("USE_DOCLING", "false").lower() != "true" or importlib.util.find_spec("docling"):
         return
     version = os.environ.get("DOCLING_VERSION", "==2.71.0")
-    subprocess.run(
-        [
-            "uv", "pip", "install", "--python", PYTHON,
-            "-i", "https://pypi.tuna.tsinghua.edu.cn/simple",
-            "--extra-index-url", "https://pypi.org/simple", "--no-cache-dir", f"docling{version}",
-        ],
-        check=True,
+    raise RuntimeError(
+        f"USE_DOCLING=true requires docling{version} to be preinstalled in the image. "
+        "Runtime package downloads are disabled so air-gapped startup remains deterministic."
     )
 
 
@@ -61,18 +58,46 @@ def initialize_database() -> None:
 
 def spawn(command: list[str], *, environment: dict[str, str] | None = None) -> subprocess.Popen:
     process = subprocess.Popen(command, cwd=ROOT, env=environment)
-    CHILDREN.append(process)
+    with CHILDREN_LOCK:
+        CHILDREN.append(process)
     return process
 
 
+def unregister(process: subprocess.Popen) -> None:
+    with CHILDREN_LOCK:
+        if process in CHILDREN:
+            CHILDREN.remove(process)
+
+
 def restart_forever(command: list[str], *, environment: dict[str, str] | None = None) -> None:
+    retry_delay = 1.0
     while not STOP.is_set():
-        process = spawn(command, environment=environment)
-        while process.poll() is None and not STOP.wait(1):
-            pass
+        started_at = time.monotonic()
+        try:
+            process = spawn(command, environment=environment)
+        except OSError as exc:
+            print(f"Failed to start child process {command[0]}: {exc}", file=sys.stderr, flush=True)
+            if STOP.wait(retry_delay):
+                return
+            retry_delay = min(retry_delay * 2, 30.0)
+            continue
+        try:
+            while process.poll() is None and not STOP.wait(1):
+                pass
+            if STOP.is_set() and process.poll() is None:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+        finally:
+            unregister(process)
         if STOP.is_set():
             return
-        time.sleep(1)
+        if time.monotonic() - started_at >= 60:
+            retry_delay = 1.0
+        if STOP.wait(retry_delay):
+            return
+        retry_delay = min(retry_delay * 2, 30.0)
 
 
 def start_loop(command: list[str], *, environment: dict[str, str] | None = None) -> None:
@@ -96,6 +121,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--enable-mcpserver", action="store_true")
     parser.add_argument("--enable-adminserver", action="store_true")
     parser.add_argument("--init-model-provider-tables", action="store_true")
+    parser.add_argument("--migrate-only", action="store_true")
+    parser.add_argument("--skip-database-initialization", action="store_true")
     parser.add_argument("--init-superuser", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--consumer-no-beg", type=int, default=0)
@@ -118,9 +145,14 @@ def parse_arguments() -> argparse.Namespace:
 
 def stop_children(*_args) -> None:
     STOP.set()
-    for process in CHILDREN:
-        if process.poll() is None:
-            process.terminate()
+    with CHILDREN_LOCK:
+        processes = list(CHILDREN)
+    for process in processes:
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except OSError:
+            pass
 
 
 def main() -> int:
@@ -128,9 +160,8 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_children)
     signal.signal(signal.SIGINT, stop_children)
     render_configuration()
-    configure_nginx()
-    ensure_docling()
-    initialize_database()
+    if not args.skip_database_initialization:
+        initialize_database()
 
     if args.init_model_provider_tables:
         subprocess.run(
@@ -144,6 +175,12 @@ def main() -> int:
             check=True,
         )
 
+    if args.migrate_only:
+        return 0
+
+    configure_nginx()
+    ensure_docling()
+
     scheme = os.environ.get("API_PROXY_SCHEME", "python").lower()
     python_enabled = scheme in {"python", "hybrid"}
     go_enabled = scheme in {"go", "hybrid"}
@@ -155,7 +192,7 @@ def main() -> int:
             start_loop(["bin/ragflow_server", "--admin"])
 
     if not args.disable_webserver:
-        spawn(["/usr/sbin/nginx", "-g", "daemon off;"])
+        start_loop(["/usr/sbin/nginx", "-g", "daemon off;"])
         if python_enabled:
             command = [PYTHON, "api/ragflow_server.py"]
             if args.init_superuser:
@@ -176,7 +213,7 @@ def main() -> int:
             "--no-transport-streamable-http-enabled" if args.no_transport_streamable_http_enabled else "--transport-streamable-http-enabled",
             "--no-json-response" if args.no_json_response else "--json-response",
         ]
-        spawn(command)
+        start_loop(command)
 
     if not args.disable_taskexecutor:
         hostname = socket.gethostname()
@@ -195,7 +232,9 @@ def main() -> int:
 
     while not STOP.wait(1):
         pass
-    for process in CHILDREN:
+    with CHILDREN_LOCK:
+        processes = list(CHILDREN)
+    for process in processes:
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:

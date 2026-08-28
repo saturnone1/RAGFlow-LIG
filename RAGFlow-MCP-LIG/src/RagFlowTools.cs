@@ -30,6 +30,12 @@ public sealed class RagFlowTools
     public Task<JsonElement> ListRagFlowDatasets(string? name = null, int page = 1, int pageSize = 100)
         => _client.GetAsync($"api/v1/datasets?page={Math.Max(1, page)}&page_size={Math.Clamp(pageSize, 1, 1000)}&name={Uri.EscapeDataString(name ?? "")}");
 
+    [McpServerTool(ReadOnly = true), Description("List lightweight dataset summaries without avatars, parser configuration, or other large fields.")]
+    public Task<JsonElement> ListRagFlowDatasetSummaries(string? name = null, int page = 1, int pageSize = 30)
+        => _client.GetProjectedCollectionAsync(
+            $"api/v1/datasets?page={Math.Max(1, page)}&page_size={Math.Clamp(pageSize, 1, 100)}&name={Uri.EscapeDataString(name ?? "")}",
+            "id", "name", "description", "doc_count", "chunk_count", "token_count", "embedding_model", "chunk_method", "update_time");
+
     [McpServerTool, Description("Create a RAGFlow dataset using the tenant default embedding model.")]
     public Task<JsonElement> CreateRagFlowDataset(string name, string description = "", string permission = "me", string chunkMethod = "naive", int chunkTokenNum = 512)
     {
@@ -55,6 +61,22 @@ public sealed class RagFlowTools
     [McpServerTool(ReadOnly = true), Description("List documents in a RAGFlow dataset with status, progress, chunk, and token counts.")]
     public Task<JsonElement> ListRagFlowDocuments(string datasetId, string? name = null, int page = 1, int pageSize = 100)
         => _client.GetAsync($"api/v1/datasets/{Uri.EscapeDataString(datasetId)}/documents?page={Math.Max(1, page)}&page_size={Math.Clamp(pageSize, 1, 1000)}&name={Uri.EscapeDataString(name ?? "")}");
+
+    [McpServerTool(ReadOnly = true), Description("Get lightweight processing status for documents without returning full progress logs or metadata.")]
+    public Task<JsonElement> GetRagFlowDatasetProcessingStatus(string datasetId, int page = 1, int pageSize = 100)
+        => _client.GetProjectedCollectionAsync(
+            $"api/v1/datasets/{Uri.EscapeDataString(datasetId)}/documents?page={Math.Max(1, page)}&page_size={Math.Clamp(pageSize, 1, 100)}&orderby=update_time&desc=true",
+            "id", "name", "run", "progress", "chunk_count", "token_count", "process_duration", "update_time");
+
+    [McpServerTool(ReadOnly = true), Description("List recently updated failed documents with a short status projection.")]
+    public Task<JsonElement> ListRecentFailedRagFlowDocuments(string datasetId, int page = 1, int pageSize = 30)
+        => _client.GetProjectedCollectionAsync(
+            $"api/v1/datasets/{Uri.EscapeDataString(datasetId)}/documents?page={Math.Max(1, page)}&page_size={Math.Clamp(pageSize, 1, 100)}&run=FAIL&orderby=update_time&desc=true",
+            "id", "name", "run", "progress", "chunk_count", "token_count", "process_duration", "update_time");
+
+    [McpServerTool(ReadOnly = true), Description("Get one document's current stage timing and processing counters without returning its full progress log.")]
+    public Task<JsonElement> GetRagFlowDocumentStageTiming(string datasetId, string documentId)
+        => _client.GetDocumentStageTimingsAsync(datasetId, documentId);
 
     [McpServerTool, Description("Upload any supported local file to a RAGFlow dataset. Absolute paths on any accessible Windows drive are accepted.")]
     public Task<JsonElement> UploadRagFlowDocument(string datasetId, string filePath)

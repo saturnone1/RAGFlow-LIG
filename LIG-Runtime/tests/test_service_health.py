@@ -8,13 +8,21 @@ from lig_runtime import service_health
 
 class ServiceHealthTests(unittest.TestCase):
     @patch("lig_runtime.service_health.urlopen")
-    def test_api_ready_requires_pong(self, urlopen: MagicMock) -> None:
+    def test_api_ready_requires_dependency_health(self, urlopen: MagicMock) -> None:
         response = urlopen.return_value.__enter__.return_value
         response.status = 200
-        response.read.return_value = b"pong"
+        response.read.return_value = b'{"status":"ok","database":"ok","redis":"ok"}'
         self.assertTrue(service_health.api_ready("http://127.0.0.1:9380"))
 
-        response.read.return_value = b"not-pong"
+        response.read.return_value = b'{"status":"degraded","database":"ok","redis":"error"}'
+        self.assertFalse(service_health.api_ready("http://127.0.0.1:9380"))
+        urlopen.assert_called_with("http://127.0.0.1:9380/api/v1/system/healthz", timeout=10)
+
+    @patch("lig_runtime.service_health.urlopen")
+    def test_api_ready_rejects_invalid_json(self, urlopen: MagicMock) -> None:
+        response = urlopen.return_value.__enter__.return_value
+        response.status = 200
+        response.read.return_value = b"not-json"
         self.assertFalse(service_health.api_ready("http://127.0.0.1:9380"))
 
     @patch("lig_runtime.service_health.socket.create_connection")
