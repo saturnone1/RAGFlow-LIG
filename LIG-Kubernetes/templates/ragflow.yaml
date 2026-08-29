@@ -1,0 +1,234 @@
+{{- $name := include "lig-ragflow.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "lig-ragflow.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.ragflow.api.service.type }}
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  ports:
+    - { name: web, port: 80, targetPort: web }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-internal
+  labels:
+    {{- include "lig-ragflow.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  ports:
+    - { name: api, port: 9380, targetPort: api }
+    - { name: admin, port: 9381, targetPort: admin }
+    - { name: official-mcp, port: 9382, targetPort: official-mcp }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-api
+  labels:
+    {{- include "lig-ragflow.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ragflow.api.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 90
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      volumes:
+        - name: bootstrap
+          configMap:
+            name: {{ $name }}-bootstrap
+      initContainers:
+        - name: wait-for-stateful-services
+          image: {{ .Values.ragflow.image | quote }}
+          imagePullPolicy: {{ .Values.ragflow.imagePullPolicy }}
+          command: [/ragflow/.venv/bin/python, /opt/lig/wait_for_tcp.py]
+          args:
+            - {{ printf "%s-mysql:3306" $name | quote }}
+            - {{ printf "%s-redis:6379" $name | quote }}
+            - {{ printf "%s-minio:9000" $name | quote }}
+            - {{ printf "%s-infinity:23817" $name | quote }}
+          volumeMounts:
+            - { name: bootstrap, mountPath: /opt/lig/wait_for_tcp.py, subPath: wait_for_tcp.py }
+        - name: migrate
+          image: {{ .Values.ragflow.image | quote }}
+          imagePullPolicy: {{ .Values.ragflow.imagePullPolicy }}
+          command: [/ragflow/.venv/bin/python, -m, lig_runtime.container_entrypoint]
+          args: [--migrate-only, --init-model-provider-tables]
+          envFrom:
+            - configMapRef: { name: {{ $name }}-env }
+            - secretRef: { name: {{ include "lig-ragflow.secret" . }} }
+      containers:
+        - name: ragflow-api
+          image: {{ .Values.ragflow.image | quote }}
+          imagePullPolicy: {{ .Values.ragflow.imagePullPolicy }}
+          command: [/ragflow/.venv/bin/python, -m, lig_runtime.container_entrypoint]
+          args:
+            - --enable-adminserver
+            - --skip-database-initialization
+            - --enable-mcpserver
+            - --mcp-host=0.0.0.0
+            - --mcp-port=9382
+            - --mcp-base-url=http://127.0.0.1:9380
+            - --mcp-script-path=/ragflow/mcp/server/server.py
+            - --mcp-mode=host
+            - --disable-taskexecutor
+            - {{ printf "--workers=%v" .Values.ragflow.api.workers | quote }}
+          envFrom:
+            - configMapRef: { name: {{ $name }}-env }
+            - secretRef: { name: {{ include "lig-ragflow.secret" . }} }
+          ports:
+            - { name: web, containerPort: 80 }
+            - { name: api, containerPort: 9380 }
+            - { name: admin, containerPort: 9381 }
+            - { name: official-mcp, containerPort: 9382 }
+          startupProbe:
+            exec:
+              command: [/ragflow/.venv/bin/python, -m, lig_runtime.service_health]
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: [/ragflow/.venv/bin/python, -m, lig_runtime.service_health]
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: [/ragflow/.venv/bin/python, -m, lig_runtime.service_health]
+            periodSeconds: 30
+            failureThreshold: 5
+          {{- with .Values.ragflow.api.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-worker
+  labels:
+    {{- include "lig-ragflow.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ragflow.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 90
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      {{- if .Values.ragflow.worker.gpu.enabled }}
+      nodeSelector:
+        {{- toYaml .Values.ragflow.worker.gpu.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.ragflow.worker.gpu.tolerations | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: bootstrap
+          configMap: { name: {{ $name }}-bootstrap }
+      initContainers:
+        - name: wait-for-api
+          image: {{ .Values.ragflow.image | quote }}
+          imagePullPolicy: {{ .Values.ragflow.imagePullPolicy }}
+          command: [/ragflow/.venv/bin/python, /opt/lig/wait_for_tcp.py]
+          args: [{{ printf "%s-internal:9380" $name | quote }}]
+          volumeMounts:
+            - { name: bootstrap, mountPath: /opt/lig/wait_for_tcp.py, subPath: wait_for_tcp.py }
+      containers:
+        - name: ragflow-worker
+          image: {{ ternary .Values.ragflow.gpuImage .Values.ragflow.image .Values.ragflow.worker.gpu.enabled | quote }}
+          imagePullPolicy: {{ .Values.ragflow.imagePullPolicy }}
+          command: [/ragflow/.venv/bin/python, -m, lig_runtime.container_entrypoint]
+          args:
+            - --disable-webserver
+            - --disable-datasync
+            - --skip-database-initialization
+            - {{ printf "--workers=%v" .Values.ragflow.worker.executorsPerPod | quote }}
+            - --host-id=$(POD_NAME)
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - name: TASK_EXECUTOR_WORKERS
+              value: {{ .Values.ragflow.worker.executorsPerPod | quote }}
+          envFrom:
+            - configMapRef: { name: {{ $name }}-env }
+            - secretRef: { name: {{ include "lig-ragflow.secret" . }} }
+          startupProbe:
+            exec:
+              command: [/ragflow/.venv/bin/python, -m, lig_runtime.worker_health]
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: [/ragflow/.venv/bin/python, -m, lig_runtime.worker_health]
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: [/ragflow/.venv/bin/python, -m, lig_runtime.worker_health]
+            periodSeconds: 30
+            failureThreshold: 5
+          {{- if or .Values.ragflow.worker.resources.requests .Values.ragflow.worker.gpu.enabled }}
+          resources:
+            {{- with .Values.ragflow.worker.resources.requests }}
+            requests:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+            {{- if .Values.ragflow.worker.gpu.enabled }}
+            limits:
+              {{ .Values.ragflow.worker.gpu.resourceName }}: {{ .Values.ragflow.worker.gpu.count }}
+            {{- end }}
+          {{- end }}
+---
+{{- if .Values.ragflow.api.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  annotations:
+    {{- toYaml .Values.ragflow.api.ingress.annotations | nindent 4 }}
+spec:
+  {{- with .Values.ragflow.api.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ragflow.api.ingress.tlsSecret }}
+  tls:
+    - hosts: [{{ $.Values.ragflow.api.ingress.host | quote }}]
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ragflow.api.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port: { name: web }
+{{- end }}

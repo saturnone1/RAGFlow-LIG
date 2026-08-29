@@ -1,0 +1,86 @@
+{{- if .Values.mcp.enabled }}
+{{- $name := include "lig-ragflow.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-mcp
+spec:
+  type: {{ .Values.mcp.service.type }}
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: mcp
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: mcp
+    spec:
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: mcp
+          image: {{ .Values.mcp.image | quote }}
+          imagePullPolicy: {{ .Values.mcp.imagePullPolicy }}
+          env:
+            - { name: RAGFLOW_BASE_URL, value: {{ printf "http://%s-internal:9380" $name | quote }} }
+            - { name: RAGFLOW_WRITES_ENABLED, value: "true" }
+            - { name: RAGFLOW_FILE_WRITES_ENABLED, value: "false" }
+            - { name: RAGFLOW_MAX_TEXT_RESPONSE_MB, value: "4" }
+            - { name: ASPNETCORE_URLS, value: "http://0.0.0.0:8080" }
+          ports:
+            - { name: http, containerPort: 8080 }
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+          {{- with .Values.mcp.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+{{- if .Values.mcp.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}-mcp
+  annotations:
+    {{- toYaml .Values.mcp.ingress.annotations | nindent 4 }}
+spec:
+  {{- with .Values.mcp.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.mcp.ingress.tlsSecret }}
+  tls:
+    - hosts: [{{ $.Values.mcp.ingress.host | quote }}]
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.mcp.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}-mcp
+                port: { name: http }
+{{- end }}
+{{- end }}

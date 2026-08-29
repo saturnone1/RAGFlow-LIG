@@ -1,0 +1,40 @@
+# 사내 Registry 주소와 StorageClass에 맞춰 복사·수정하십시오.
+global:
+  storageClass: local-path
+  imagePullSecrets:
+    - name: lig-registry-credentials
+
+ragflow:
+  image: registry.internal/lig/ragflow-ui:v0.26.4-4
+  gpuImage: registry.internal/lig/ragflow-ui-gpu:v0.26.4-4
+  worker:
+    replicas: 1
+    executorsPerPod: 3
+    gpu:
+      enabled: false
+
+mcp:
+  image: registry.internal/lig/ragflow-mcp:v0.26.4-3
+
+mysql:
+  image: registry.internal/mysql:8.0.39
+redis:
+  image: registry.internal/valkey/valkey:8
+minio:
+  image: registry.internal/pgsty/minio:RELEASE.2026-03-25T00-00-00Z
+infinity:
+  image: registry.internal/infiniflow/infinity:v0.7.0
+
+# 필요할 때만 true로 바꿉니다.
+paddleocr:
+  enabled: false
+  image: registry.internal/lig/paddleocr-ko:v0.26.4-4
+embedding:
+  enabled: false
+  teiImage: registry.internal/lig/qwen3-embedding-tei:0.6b-1
+  adapterImage: registry.internal/lig/qwen3-embedding-adapter:0.6b-1
+paddleocrVl:
+  enabled: false
+  vlmImage: registry.internal/lig/paddleocr-vl-vlm:1.6-2
+  apiImage: registry.internal/lig/paddleocr-vl-pipeline-cpu:1.6-1
+  gatewayImage: registry.internal/lig/paddleocr-vl-gateway:1.6-1

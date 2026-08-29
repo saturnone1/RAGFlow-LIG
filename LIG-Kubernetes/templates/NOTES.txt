@@ -1,0 +1,12 @@
+LIG AI Knowledge Hub가 {{ .Release.Namespace }} namespace에 준비되었습니다.
+
+상태 확인:
+  kubectl -n {{ .Release.Namespace }} get pods,services,persistentvolumeclaims
+
+웹 임시 접속:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "lig-ragflow.fullname" . }} 8080:80
+
+관리 MCP 임시 접속:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "lig-ragflow.fullname" . }}-mcp 8081:8080
+
+MCP 클라이언트는 각 사용자의 개인 RAGFlow API 키를 Bearer token으로 전송해야 합니다.

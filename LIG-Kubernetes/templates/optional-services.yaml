@@ -1,0 +1,363 @@
+{{- $name := include "lig-ragflow.fullname" . -}}
+{{- if .Values.paddleocr.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-paddleocr
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: paddleocr
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-paddleocr
+spec:
+  # 작업 레지스트리가 프로세스 메모리에 있으므로 1개로 고정합니다.
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: paddleocr
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: paddleocr
+    spec:
+      terminationGracePeriodSeconds: 90
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: paddleocr
+          image: {{ .Values.paddleocr.image | quote }}
+          env:
+            - { name: PADDLEOCR_DEVICE, value: cpu }
+            - { name: PADDLEOCR_DIRECT_RENDER_DPI, value: {{ .Values.paddleocr.renderDpi | quote }} }
+            - { name: PADDLEOCR_JOB_WORKERS, value: {{ .Values.paddleocr.jobWorkers | quote }} }
+            - { name: PADDLEOCR_MAX_PENDING_JOBS, value: {{ .Values.paddleocr.maxPendingJobs | quote }} }
+            - { name: PADDLEOCR_JOB_DIRECTORY, value: /var/run/lig-paddleocr/jobs }
+            - { name: PADDLEOCR_INTERNAL_BASE_URL, value: {{ printf "http://%s-paddleocr:8080" $name | quote }} }
+            - name: PADDLEOCR_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "lig-ragflow.secret" . }}, key: PADDLEOCR_INTERNAL_TOKEN }
+          ports:
+            - { name: http, containerPort: 8080 }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 30
+          volumeMounts:
+            - { name: jobs, mountPath: /var/run/lig-paddleocr/jobs }
+          {{- with .Values.paddleocr.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: jobs
+          emptyDir: {}
+---
+{{- end }}
+{{- if .Values.embedding.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-embedding-tei
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: embedding-tei
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-embedding-tei
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: embedding-tei
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: embedding-tei
+    spec:
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: tei
+          image: {{ .Values.embedding.teiImage | quote }}
+          args:
+            - --model-id
+            - /model
+            - --served-model-name
+            - Qwen/Qwen3-Embedding-0.6B
+            - --port
+            - "80"
+            - --tokenization-workers
+            - "2"
+            - --max-concurrent-requests
+            - "8"
+            - --max-batch-requests
+            - "4"
+            - --max-batch-tokens
+            - "2048"
+            - --auto-truncate
+            - --json-output
+          ports:
+            - { name: http, containerPort: 80 }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          {{- with .Values.embedding.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-embedding
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: embedding-adapter
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-embedding
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: embedding-adapter
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: embedding-adapter
+    spec:
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: adapter
+          image: {{ .Values.embedding.adapterImage | quote }}
+          env:
+            - { name: EMBEDDING_UPSTREAM_URL, value: {{ printf "http://%s-embedding-tei:80" $name | quote }} }
+            - { name: EMBEDDING_ADAPTER_PORT, value: "8080" }
+            - { name: EMBEDDING_UPSTREAM_TIMEOUT_SECONDS, value: "300" }
+            - { name: EMBEDDING_MAX_CONCURRENT_REQUESTS, value: {{ .Values.embedding.maxConcurrentRequests | quote }} }
+          ports:
+            - { name: http, containerPort: 8080 }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+---
+{{- end }}
+{{- if .Values.paddleocrVl.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  # Pipeline 이미지의 오프라인 설정이 이 DNS 이름을 사용합니다. 따라서
+  # PaddleOCR-VL은 전용 namespace에 설치해야 합니다.
+  name: paddleocr-vlm-server
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: paddleocr-vlm
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-paddleocr-vlm
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: paddleocr-vlm
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: paddleocr-vlm
+    spec:
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      nodeSelector:
+        {{- toYaml .Values.paddleocrVl.gpu.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.paddleocrVl.gpu.tolerations | nindent 8 }}
+      containers:
+        - name: vlm
+          image: {{ .Values.paddleocrVl.vlmImage | quote }}
+          env:
+            - { name: PADDLEOCR_VL_GPU_MEMORY_UTILIZATION, value: {{ .Values.paddleocrVl.gpuMemoryUtilization | quote }} }
+            - { name: PADDLEOCR_VL_MAX_MODEL_LEN, value: {{ .Values.paddleocrVl.maxModelLen | quote }} }
+            - { name: PADDLEOCR_VL_MAX_NUM_BATCHED_TOKENS, value: {{ .Values.paddleocrVl.maxNumBatchedTokens | quote }} }
+            - { name: PADDLEOCR_VL_MAX_NUM_SEQS, value: {{ .Values.paddleocrVl.maxNumSeqs | quote }} }
+            - { name: PADDLEOCR_VL_API_SERVER_COUNT, value: {{ .Values.paddleocrVl.apiServerCount | quote }} }
+          ports:
+            - { name: http, containerPort: 8080 }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            failureThreshold: 40
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+          resources:
+            {{- with .Values.paddleocrVl.resources.vlm.requests }}
+            requests:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+            limits:
+              {{ .Values.paddleocrVl.gpu.resourceName }}: {{ .Values.paddleocrVl.gpu.count }}
+          volumeMounts:
+            - { name: dshm, mountPath: /dev/shm }
+      volumes:
+        - name: dshm
+          emptyDir: { medium: Memory }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-paddleocr-vl-api
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: paddleocr-vl-api
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-paddleocr-vl-api
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: paddleocr-vl-api
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: paddleocr-vl-api
+    spec:
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: api
+          image: {{ .Values.paddleocrVl.apiImage | quote }}
+          env:
+            - { name: VLM_BACKEND, value: vllm }
+            - { name: PADDLEOCR_VL_PIPELINE_DEVICE, value: cpu }
+          ports:
+            - { name: http, containerPort: 8080 }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+            failureThreshold: 40
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 15
+          volumeMounts:
+            - { name: dshm, mountPath: /dev/shm }
+          {{- with .Values.paddleocrVl.resources.api }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: dshm
+          emptyDir: { medium: Memory }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-paddleocr-vl
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: paddleocr-vl
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-paddleocr-vl
+spec:
+  # Job 상태가 메모리에 있으므로 gateway도 1개로 고정합니다.
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: paddleocr-vl
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: paddleocr-vl
+    spec:
+      terminationGracePeriodSeconds: 90
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: gateway
+          image: {{ .Values.paddleocrVl.gatewayImage | quote }}
+          env:
+            - { name: PADDLEOCR_VL_UPSTREAM_URL, value: {{ printf "http://%s-paddleocr-vl-api:8080" $name | quote }} }
+            - { name: PADDLEOCR_VL_INTERNAL_BASE_URL, value: {{ printf "http://%s-paddleocr-vl:8080" $name | quote }} }
+            - { name: PADDLEOCR_VL_JOB_WORKERS, value: {{ .Values.paddleocrVl.jobWorkers | quote }} }
+            - { name: PADDLEOCR_VL_MAX_PENDING_JOBS, value: {{ .Values.paddleocrVl.maxPendingJobs | quote }} }
+            - { name: PADDLEOCR_VL_REQUEST_TIMEOUT_SECONDS, value: {{ .Values.paddleocrVl.requestTimeoutSeconds | quote }} }
+            - { name: PADDLEOCR_VL_JOB_DIRECTORY, value: /var/run/lig-paddleocr-vl/jobs }
+            - name: PADDLEOCR_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "lig-ragflow.secret" . }}, key: PADDLEOCR_VL_INTERNAL_TOKEN }
+          ports:
+            - { name: http, containerPort: 8080 }
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          volumeMounts:
+            - { name: jobs, mountPath: /var/run/lig-paddleocr-vl/jobs }
+          {{- with .Values.paddleocrVl.resources.gateway }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: jobs
+          emptyDir: {}
+{{- end }}

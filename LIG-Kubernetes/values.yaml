@@ -1,0 +1,141 @@
+global:
+  imagePullSecrets: []
+  storageClass: ""
+
+secret:
+  # 운영 Secret은 Chart가 만들지 않습니다. secret.example.yaml을 복사해
+  # 별도로 적용하거나 기존 Secret 이름을 지정하십시오.
+  existingSecret: lig-ragflow-secrets
+
+config:
+  timezone: Asia/Seoul
+  registerEnabled: "1"
+  pdfTaskPageSize: "40"
+  adaptivePdfTaskPageSize: "false"
+  embeddingBatchSize: "4"
+  maxConcurrentEmbedders: "4"
+  docProgressMaxBytes: "4194304"
+  taskLogMaxBytes: "262144"
+  taskLeaseSeconds: "180"
+  taskPendingClaimIdleSeconds: "300"
+  taskCancelGraceSeconds: "5"
+  taskCancelPollSeconds: "1"
+  extraEnv: {}
+
+ragflow:
+  image: lig/ragflow-ui:v0.26.4-4
+  gpuImage: lig/ragflow-ui-gpu:v0.26.4-4
+  imagePullPolicy: IfNotPresent
+  api:
+    # migration initContainer가 API보다 먼저 실행되므로 기본값 1을 유지합니다.
+    replicas: 1
+    workers: 3
+    service:
+      type: ClusterIP
+    ingress:
+      enabled: false
+      className: ""
+      host: ragflow.internal
+      tlsSecret: ""
+      annotations: {}
+    resources:
+      requests: {}
+  worker:
+    replicas: 1
+    executorsPerPod: 3
+    gpu:
+      enabled: false
+      resourceName: nvidia.com/gpu
+      count: 1
+      nodeSelector: {}
+      tolerations: []
+    resources:
+      requests: {}
+
+mcp:
+  enabled: true
+  image: lig/ragflow-mcp:v0.26.4-3
+  imagePullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+    className: ""
+    host: ragflow-mcp.internal
+    tlsSecret: ""
+    annotations: {}
+  resources:
+    requests: {}
+
+mysql:
+  enabled: true
+  image: mysql:8.0.39
+  storage: 50Gi
+  resources:
+    requests: {}
+
+redis:
+  enabled: true
+  image: valkey/valkey:8
+  storage: 10Gi
+  maxmemory: "0"
+  resources:
+    requests: {}
+
+minio:
+  enabled: true
+  image: pgsty/minio:RELEASE.2026-03-25T00-00-00Z
+  storage: 100Gi
+  resources:
+    requests: {}
+
+infinity:
+  enabled: true
+  image: infiniflow/infinity:v0.7.0
+  storage: 100Gi
+  resources:
+    requests: {}
+
+paddleocr:
+  enabled: false
+  image: lig/paddleocr-ko:v0.26.4-4
+  renderDpi: "144"
+  jobWorkers: "1"
+  maxPendingJobs: "8"
+  resources:
+    requests: {}
+
+embedding:
+  enabled: false
+  teiImage: lig/qwen3-embedding-tei:0.6b-1
+  adapterImage: lig/qwen3-embedding-adapter:0.6b-1
+  maxConcurrentRequests: "6"
+  resources:
+    requests: {}
+
+paddleocrVl:
+  enabled: false
+  vlmImage: lig/paddleocr-vl-vlm:1.6-2
+  apiImage: lig/paddleocr-vl-pipeline-cpu:1.6-1
+  gatewayImage: lig/paddleocr-vl-gateway:1.6-1
+  gpu:
+    resourceName: nvidia.com/gpu
+    count: 1
+    nodeSelector: {}
+    tolerations: []
+  gpuMemoryUtilization: "0.60"
+  maxModelLen: "16384"
+  maxNumBatchedTokens: "16384"
+  maxNumSeqs: "8"
+  apiServerCount: "1"
+  jobWorkers: "1"
+  maxPendingJobs: "8"
+  requestTimeoutSeconds: "3600"
+  resources:
+    vlm:
+      requests: {}
+    api:
+      requests: {}
+    gateway:
+      requests: {}
+

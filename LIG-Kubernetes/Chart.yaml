@@ -1,0 +1,7 @@
+apiVersion: v2
+name: lig-ragflow
+description: LIG AI Knowledge Hub Kubernetes deployment for RAGFlow v0.26.4
+type: application
+version: 0.1.0
+appVersion: "v0.26.4"
+

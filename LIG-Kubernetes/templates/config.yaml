@@ -1,0 +1,81 @@
+{{- if not (and .Values.mysql.enabled .Values.redis.enabled .Values.minio.enabled .Values.infinity.enabled) }}
+{{- fail "현재 LIG Chart는 MySQL, Redis, MinIO, Infinity 내장 StatefulSet을 모두 필요로 합니다." }}
+{{- end }}
+{{- if ne (int .Values.ragflow.api.replicas) 1 }}
+{{- fail "ragflow.api.replicas는 migration initContainer 보호를 위해 1이어야 합니다. 문서 처리량은 worker replicas로 확장하십시오." }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "lig-ragflow.fullname" . }}-env
+  labels:
+    {{- include "lig-ragflow.labels" . | nindent 4 }}
+data:
+  DOC_ENGINE: infinity
+  API_PROXY_SCHEME: python
+  TZ: {{ .Values.config.timezone | quote }}
+  REGISTER_ENABLED: {{ .Values.config.registerEnabled | quote }}
+  MYSQL_HOST: {{ printf "%s-mysql" (include "lig-ragflow.fullname" .) | quote }}
+  MYSQL_PORT: "3306"
+  MYSQL_USER: root
+  MYSQL_DBNAME: rag_flow
+  MINIO_HOST: {{ printf "%s-minio" (include "lig-ragflow.fullname" .) | quote }}
+  REDIS_HOST: {{ printf "%s-redis" (include "lig-ragflow.fullname" .) | quote }}
+  REDIS_PORT: "6379"
+  INFINITY_HOST: {{ printf "%s-infinity" (include "lig-ragflow.fullname" .) | quote }}
+  PADDLEOCR_BASE_URL: {{ printf "http://%s-paddleocr:8080" (include "lig-ragflow.fullname" .) | quote }}
+  PADDLEOCR_ALGORITHM: PP-OCRv5
+  PADDLEOCR_VL_BASE_URL: {{ printf "http://%s-paddleocr-vl:8080" (include "lig-ragflow.fullname" .) | quote }}
+  PDF_TASK_PAGE_SIZE: {{ .Values.config.pdfTaskPageSize | quote }}
+  PADDLEOCR_TASK_PAGE_SIZE: {{ .Values.config.pdfTaskPageSize | quote }}
+  ADAPTIVE_PDF_TASK_PAGE_SIZE: {{ .Values.config.adaptivePdfTaskPageSize | quote }}
+  EMBEDDING_BATCH_SIZE: {{ .Values.config.embeddingBatchSize | quote }}
+  MAX_CONCURRENT_EMBEDDERS: {{ .Values.config.maxConcurrentEmbedders | quote }}
+  MAX_CONCURRENT_TASKS: "1"
+  MAX_CONCURRENT_CHUNK_BUILDERS: "1"
+  TASK_LEASE_SECONDS: {{ .Values.config.taskLeaseSeconds | quote }}
+  TASK_PENDING_CLAIM_IDLE_SECONDS: {{ .Values.config.taskPendingClaimIdleSeconds | quote }}
+  TASK_CANCEL_GRACE_SECONDS: {{ .Values.config.taskCancelGraceSeconds | quote }}
+  TASK_CANCEL_POLL_SECONDS: {{ .Values.config.taskCancelPollSeconds | quote }}
+  DOC_PROGRESS_MSG_MAX_BYTES: {{ .Values.config.docProgressMaxBytes | quote }}
+  TASK_MAX_LOG_LENGTH: {{ .Values.config.taskLogMaxBytes | quote }}
+  MAX_CONTENT_LENGTH: "0"
+  QUART_BODY_TIMEOUT: "0"
+  LIG_DOCUMENT_MAX_BYTES: "0"
+  HUGGINGFACE_EMBEDDING_TIMEOUT_SECONDS: "300"
+  HUGGINGFACE_EMBEDDING_MAX_RETRIES: "0"
+  HUGGINGFACE_EMBEDDING_QUERY_MAX_RETRIES: "3"
+  {{- range $key, $value := .Values.config.extraEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "lig-ragflow.fullname" . }}-bootstrap
+  labels:
+    {{- include "lig-ragflow.labels" . | nindent 4 }}
+data:
+  wait_for_tcp.py: |
+    import socket
+    import sys
+    import time
+
+    deadline = time.monotonic() + 600
+    targets = []
+    for value in sys.argv[1:]:
+        host, port = value.rsplit(":", 1)
+        targets.append((host, int(port)))
+    while targets and time.monotonic() < deadline:
+        pending = []
+        for host, port in targets:
+            try:
+                with socket.create_connection((host, port), timeout=3):
+                    pass
+            except OSError:
+                pending.append((host, port))
+        targets = pending
+        if targets:
+            time.sleep(2)
+    if targets:
+        raise SystemExit("services not ready: " + ", ".join(f"{h}:{p}" for h, p in targets))

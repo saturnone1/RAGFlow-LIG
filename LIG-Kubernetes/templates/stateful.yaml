@@ -1,0 +1,336 @@
+{{- $name := include "lig-ragflow.fullname" . -}}
+{{- if .Values.mysql.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-mysql
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- include "lig-ragflow.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.mysql.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-mysql
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}-mysql
+spec:
+  serviceName: {{ $name }}-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: mysql
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: mysql
+    spec:
+      terminationGracePeriodSeconds: 60
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: mysql
+          image: {{ .Values.mysql.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --max_connections=1000
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_general_ci
+            - --default-authentication-plugin=mysql_native_password
+            - --max_allowed_packet=1073741824
+          env:
+            - name: MYSQL_DATABASE
+              value: rag_flow
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lig-ragflow.secret" . }}
+                  key: MYSQL_ROOT_PASSWORD
+          ports:
+            - name: mysql
+              containerPort: 3306
+          startupProbe:
+            tcpSocket: { port: mysql }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: { port: mysql }
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          {{- with .Values.mysql.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}-mysql
+---
+{{- end }}
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-redis
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- include "lig-ragflow.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-redis
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}-redis
+spec:
+  serviceName: {{ $name }}-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      terminationGracePeriodSeconds: 60
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [redis-server]
+          args:
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --maxmemory
+            - {{ .Values.redis.maxmemory | quote }}
+            - --maxmemory-policy
+            - noeviction
+            - --appendonly
+            - "yes"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lig-ragflow.secret" . }}
+                  key: REDIS_PASSWORD
+          ports:
+            - name: redis
+              containerPort: 6379
+          startupProbe:
+            tcpSocket: { port: redis }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: { port: redis }
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- with .Values.redis.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}-redis
+---
+{{- end }}
+{{- if .Values.minio.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-minio
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- include "lig-ragflow.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.minio.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-minio
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  ports:
+    - { name: s3, port: 9000, targetPort: s3 }
+    - { name: console, port: 9001, targetPort: console }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}-minio
+spec:
+  serviceName: {{ $name }}-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      terminationGracePeriodSeconds: 60
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image | quote }}
+          args: [server, --console-address=:9001, /data]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: { name: {{ include "lig-ragflow.secret" . }}, key: MINIO_ROOT_USER }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ include "lig-ragflow.secret" . }}, key: MINIO_ROOT_PASSWORD }
+          ports:
+            - { name: s3, containerPort: 9000 }
+            - { name: console, containerPort: 9001 }
+          startupProbe:
+            tcpSocket: { port: s3 }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: { port: s3 }
+            periodSeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          {{- with .Values.minio.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{ $name }}-minio }
+---
+{{- end }}
+{{- if .Values.infinity.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-infinity
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: infinity
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- include "lig-ragflow.storageClass" . | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .Values.infinity.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-infinity
+spec:
+  selector:
+    {{- include "lig-ragflow.selector" . | nindent 4 }}
+    app.kubernetes.io/component: infinity
+  ports:
+    - { name: thrift, port: 23817, targetPort: thrift }
+    - { name: http, port: 23820, targetPort: http }
+    - { name: psql, port: 5432, targetPort: psql }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}-infinity
+spec:
+  serviceName: {{ $name }}-infinity
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "lig-ragflow.selector" . | nindent 6 }}
+      app.kubernetes.io/component: infinity
+  template:
+    metadata:
+      labels:
+        {{- include "lig-ragflow.selector" . | nindent 8 }}
+        app.kubernetes.io/component: infinity
+    spec:
+      terminationGracePeriodSeconds: 60
+      {{- include "lig-ragflow.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: infinity
+          image: {{ .Values.infinity.image | quote }}
+          ports:
+            - { name: thrift, containerPort: 23817 }
+            - { name: http, containerPort: 23820 }
+            - { name: psql, containerPort: 5432 }
+          startupProbe:
+            httpGet: { path: /admin/node/current, port: http }
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            httpGet: { path: /admin/node/current, port: http }
+            periodSeconds: 10
+          volumeMounts:
+            - { name: data, mountPath: /var/infinity }
+          {{- with .Values.infinity.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{ $name }}-infinity }
+{{- end }}
