@@ -4,5 +4,6 @@ RAGFlow v0.26.4 원본은 수정하지 않습니다. 빌드가 고정된 upstrea
 
 - `contract.py`: 해시와 anchor 개수 검증
 - `dataset_settings.py`: 데이터셋·문서 파서 설정을 한 트랜잭션으로 전파
+- `offline_team_membership.py`: 가입된 활성 계정을 이메일 없이 즉시 일반 팀원으로 추가하고 동시 중복 등록을 DB 잠금으로 방지
 
 새 보강은 이 디렉터리에 기능별 모듈로 추가합니다. 기존 `apply-runtime-patches.py`의 검증된 패치는 동작을 바꾸는 대규모 이동을 피하고, 해당 기능을 수정할 때 모듈로 옮깁니다. 대상 upstream 버전이 달라지면 조용히 패치하지 않고 이미지 빌드를 실패시킵니다.

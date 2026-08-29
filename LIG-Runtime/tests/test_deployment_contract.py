@@ -10,6 +10,7 @@ class DeploymentContractTests(unittest.TestCase):
         cls.launcher = (cls.repository / "LIG-Deployment/lig-ragflow.ps1").read_text(encoding="utf-8")
         cls.airgap_export = (cls.repository / "LIG-Deployment/airgap-export.ps1").read_text(encoding="utf-8")
         cls.airgap_import = (cls.repository / "LIG-Deployment/airgap-import.ps1").read_text(encoding="utf-8")
+        cls.ui_dockerfile = (cls.repository / "LIG-UI/Dockerfile").read_text(encoding="utf-8")
 
     def test_database_migration_is_a_one_shot_dependency(self) -> None:
         self.assertIn("ragflow-migrate:", self.compose)
@@ -25,6 +26,18 @@ class DeploymentContractTests(unittest.TestCase):
         start_block = self.launcher.split('    "start" {', 1)[1].split('    "paddleocr-start" {', 1)[0]
         self.assertNotIn("--remove-orphans", start_block)
         self.assertIn('Invoke-Compose @("up", "-d")', start_block)
+
+    def test_mcp_uses_each_callers_ragflow_token(self) -> None:
+        self.assertEqual(self.compose.count("- --mcp-mode=host"), 2)
+        self.assertNotIn("--mcp-mode=self-host", self.compose)
+        management = self.compose.split("  ragflow-mcp-lig:", 1)[1].split("  infinity:", 1)[0]
+        self.assertNotIn("RAGFLOW_API_KEY:", management)
+        self.assertNotIn("LIG_MCP_API_KEY:", management)
+        self.assertIn("LIG_LEGACY_MCP_API_KEY:", self.compose)
+
+    def test_airgapped_team_membership_patch_is_packaged(self) -> None:
+        self.assertIn("/ragflow/api/apps/restful_apis/tenant_api.py", self.ui_dockerfile)
+        self.assertIn("offline_team_membership.py", (self.repository / "LIG-Runtime/runtime_patches/README.md").read_text(encoding="utf-8"))
 
     def test_recovery_test_is_explicit(self) -> None:
         self.assertIn('"recovery-test" { Invoke-RecoveryTest }', self.launcher)

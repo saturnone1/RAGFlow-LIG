@@ -64,11 +64,10 @@ MCP 도구 결과는 단일 응답이므로 SSE를 실시간 중계하지 않습
 - 소스 빌드: .NET 8 SDK 이상
 - 자체 포함 배포본: 별도 .NET 런타임 불필요
 
-RAGFlow UI의 사용자 설정/API 메뉴에서 API 키를 만든 뒤 현재 PowerShell 세션에만 전달합니다. 키를 소스, Compose 파일 또는 MCP 클라이언트가 공유하는 저장소에 기록하지 마십시오.
+RAGFlow UI의 사용자 설정/API 메뉴에서 사용자별 API 키를 만든 뒤 MCP 클라이언트의 Bearer 토큰으로 등록합니다. 키를 소스, Compose 파일 또는 다른 사용자가 공유하는 저장소에 기록하지 마십시오.
 
 ```powershell
 $env:RAGFLOW_BASE_URL='http://127.0.0.1:42301'
-$env:RAGFLOW_API_KEY='ragflow-...'
 $env:RAGFLOW_WRITES_ENABLED='true'
 dotnet run --project src/RagFlowMcp.csproj
 ```
@@ -83,7 +82,7 @@ cd ..\LIG-Deployment
 
 컨테이너는 CPU/GPU 설치에서 공통으로 유지되는 RAGFlow 내부 별칭 `http://ragflow-runtime:9380`을 사용하며, 호스트에는 관리 MCP만 `127.0.0.1:42306`으로 공개합니다. 업로드할 파일은 `LIG-Deployment/mcp-files`에 넣고 MCP 도구에는 `/data/<파일명>`을 전달합니다.
 
-Docker 없이 개발할 때만 저장소의 `LIG-Deployment/.env.secret`을 읽는 Windows 백그라운드 실행 스크립트를 사용합니다.
+Docker 없이 개발할 때는 Windows 백그라운드 실행 스크립트를 사용합니다. 서버 프로세스에는 사용자 API 키를 저장하지 않습니다.
 
 ```powershell
 .\start-lig-ragflow-mcp.ps1
@@ -104,18 +103,16 @@ dotnet publish src/RagFlowMcp.csproj -c Release -r win-x64 --self-contained true
 
 ## MCP 클라이언트 연결
 
-Compose 관리 MCP를 사용하는 클라이언트에는 `http://127.0.0.1:42306/mcp`를 등록합니다. Compose 배포는 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 관리 MCP의 Bearer 키로도 사용하므로 클라이언트가 `Authorization: Bearer <RAGFLOW_MCP_API_KEY>` 헤더를 보내야 합니다. 호스트 포트는 로컬 PC에만 바인딩됩니다. Docker 없이 시작 스크립트로 실행한 개발 인스턴스는 충돌 방지를 위해 기존 `http://127.0.0.1:42206/mcp`를 사용합니다. 별도 실행에서 `ASPNETCORE_URLS`를 외부 인터페이스에 바인딩하려면 `LIG_MCP_API_KEY`가 반드시 설정되어야 합니다. `/healthz`에는 비밀 정보가 없으며 인증 없이 상태 확인에 사용할 수 있습니다.
+Compose 관리 MCP를 사용하는 클라이언트에는 `http://127.0.0.1:42306/mcp`를 등록하고 `Authorization: Bearer <개인 RAGFlow API 키>`를 보냅니다. 관리 MCP는 이 토큰을 RAGFlow REST API에 그대로 전달하므로 Web UI와 동일한 테넌트 권한이 적용됩니다. Docker 없이 시작 스크립트로 실행한 개발 인스턴스는 충돌 방지를 위해 `http://127.0.0.1:42206/mcp`를 사용합니다. `/healthz`에는 비밀 정보가 없으며 인증 없이 상태 확인에 사용할 수 있습니다.
 
 환경변수는 다음과 같습니다.
 
 | 변수 | 기본값 | 설명 |
 | --- | --- | --- |
 | `RAGFLOW_BASE_URL` | `http://127.0.0.1:42301` | RAGFlow REST API 주소. Compose 내부에서는 `http://ragflow-runtime:9380` |
-| `RAGFLOW_API_KEY` | 없음 | RAGFlow API 키, 필수 |
 | `RAGFLOW_WRITES_ENABLED` | `false` | `true`일 때만 생성·수정·삭제·파싱 허용. 시작 스크립트는 기존 운용 호환을 위해 기본 `true`, `-ReadOnly`로 차단 |
 | `RAGFLOW_FILE_WRITES_ENABLED` | `false` | `true`일 때만 다운로드 도구의 로컬 파일 생성·덮어쓰기 허용 |
 | `RAGFLOW_MAX_TEXT_RESPONSE_MB` | `4` | 범용 JSON·텍스트 응답 상한, 1~64 MiB |
-| `LIG_MCP_API_KEY` | 없음 | MCP 호출용 별도 Bearer 키. 외부 인터페이스 바인딩 시 필수 |
 | `ASPNETCORE_URLS` | `http://127.0.0.1:42206` | Docker 없이 실행하는 개발 MCP 수신 주소. Compose는 호스트 `42306`을 컨테이너 `8080`에 연결 |
 
 `upload_rag_flow_document`의 `filePath`는 MCP 프로세스가 실제로 읽을 수 있어야 합니다. Compose 배포에서는 `LIG-Deployment/mcp-files`가 컨테이너의 `/data`로 연결되므로 `/data/<파일명>`을 사용합니다. Windows 직접 실행에서는 접근 가능한 로컬 절대 경로를 사용할 수 있습니다.
@@ -127,6 +124,12 @@ Compose 관리 MCP를 사용하는 클라이언트에는 `http://127.0.0.1:42306
 ```powershell
 $env:RAGFLOW_API_KEY='ragflow-...'
 .\tests\mcp-smoke.ps1
+```
+
+실제 RAGFlow나 Docker 없이 두 사용자가 동시에 호출해도 각 Bearer가 서로 다른 데이터셋 결과로 전달되는지 확인할 수 있습니다. 이 테스트는 로컬 모의 API와 임시 MCP만 사용하고 자동 종료합니다.
+
+```powershell
+.\tests\mcp-tenant-isolation.ps1
 ```
 
 Compose에서 실행 중인 관리 MCP와 컨테이너 내부 RAGFlow 연결을 확인하려면 다음 명령을 사용합니다.
@@ -154,4 +157,4 @@ $env:RAGFLOW_API_KEY='ragflow-...'
 
 이 실행 파일만으로 RAG 기능이 생기는 것은 아닙니다. 에어갭 PC에는 RAGFlow Docker 이미지, Ollama 임베딩 모델, RAGFlow 데이터 볼륨이 필요합니다. 온라인 PC에서 `LIG-Deployment/airgap-export.ps1`로 반입 묶음을 만들고 오프라인 PC에서 `airgap-import.ps1`로 복원한 다음 RAGFlow를 먼저 시작하십시오.
 
-API 키는 반입 묶음에 포함하지 않습니다. 오프라인 RAGFlow UI에서 새로 만들고 이 MCP 프로세스의 환경변수로 전달합니다. 임베딩 모델은 특정 PDF 전용 데이터가 아니라 모든 문서에 재사용하는 범용 모델입니다.
+API 키는 반입 묶음에 포함하지 않습니다. 오프라인 RAGFlow UI에서 사용자별로 만들고 각 MCP 클라이언트의 Bearer 토큰으로 등록합니다. 임베딩 모델은 특정 PDF 전용 데이터가 아니라 모든 문서에 재사용하는 범용 모델입니다.

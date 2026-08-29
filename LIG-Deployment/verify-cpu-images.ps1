@@ -204,6 +204,7 @@ required_patches = {
     "/ragflow/rag/svr/task_executor_refactor/embedding_service.py": ("import asyncio", "async def encode_at", "asyncio.gather"),
     "/ragflow/rag/svr/task_executor_limiter.py": ("MAX_CONCURRENT_EMBEDDERS", "LoopLocalSemaphore(MAX_CONCURRENT_EMBEDDERS)"),
     "/ragflow/rag/svr/task_executor_refactor/dataflow_service.py": ("async def _embed_chunks",),
+    "/ragflow/api/apps/restful_apis/tenant_api.py": ("Registered active user not found.", "role=UserTenantRole.NORMAL", "with DB.lock"),
     "/ragflow/api/db/joint_services/tenant_model_service.py": ("ensure_paddleocr_vl_from_env", "paddleocr-vl-from-env", "PADDLEOCR_VL_ACCESS_TOKEN", "get_by_provider_id_and_instance_name", "Do not overwrite", "_migrate_profile_references", "_ocr_endpoint_available", "Retired duplicate bundled"),
     "/ragflow/rag/llm/ocr_model.py": ("paddleocr_api_mode", "PADDLEOCR_API_MODE", "paddleocr_direct_workers", "paddleocr_direct_render_dpi", "_apply_dataset_overrides"),
 }
@@ -211,6 +212,9 @@ for filename, markers in required_patches.items():
     source = Path(filename).read_text(encoding="utf-8")
     for marker in markers:
         assert marker in source, f"missing runtime patch marker {marker!r} in {filename}"
+tenant_api_source = Path("/ragflow/api/apps/restful_apis/tenant_api.py").read_text(encoding="utf-8")
+assert "send_invite_email" not in tenant_api_source
+assert "UserTenantRole.INVITE," not in tenant_api_source
 
 import msoffcrypto  # noqa: F401
 import olefile  # noqa: F401
@@ -245,7 +249,7 @@ assert all(providers[0] == "CPUExecutionProvider" for providers in app.OCR_SESSI
 app_source = Path(app.__file__).read_text(encoding="utf-8")
 assert 'PADDLEOCR_DEVICE' in app_source
 assert 'CUDAExecutionProvider' in app_source
-for marker in ("ensure_paddleocr_vl_from_env", "APIToken.create", "RAGFLOW_MCP_HOST_API_KEY"):
+for marker in ("ensure_paddleocr_vl_from_env", "ensure_paddleocr_from_env"):
     assert marker in app_source, f"missing PaddleOCR provisioning marker: {marker}"
 scale = app._pdf_render_scale(app.MAX_PAGE_PIXELS, 2, 144)
 assert scale < 1.0

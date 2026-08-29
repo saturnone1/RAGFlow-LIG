@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Password,
     [string]$BaseUrl = "http://127.0.0.1:42301/api/v1",
-    [string]$SecretFile = (Join-Path $PSScriptRoot "..\..\LIG-Deployment\.env.secret"),
+    [string]$ApiKey = $env:RAGFLOW_API_KEY,
     [int]$TimeoutSeconds = 600
 )
 
@@ -50,14 +50,10 @@ function Send-Document([string]$DatasetId, [string]$Path, [string]$DocumentPassw
     return Invoke-RestMethod -Uri "$BaseUrl/datasets/$DatasetId/documents" -Method Post -Headers $script:headers -Form $form -TimeoutSec 120
 }
 
-$secretLine = Get-Content -LiteralPath $SecretFile |
-    Where-Object { $_ -match '^RAGFLOW_MCP_API_KEY=' } |
-    Select-Object -First 1
-$apiKey = ($secretLine -split '=', 2)[1]
-if ([string]::IsNullOrWhiteSpace($apiKey) -or $apiKey -match '^replace-') {
-    throw "RAGFLOW_MCP_API_KEY is not configured in $SecretFile"
+if ([string]::IsNullOrWhiteSpace($ApiKey) -or $ApiKey -match '^replace-') {
+    throw "ApiKey or RAGFLOW_API_KEY must contain the test user's personal RAGFlow API key."
 }
-$headers = @{ Authorization = "Bearer $apiKey" }
+$headers = @{ Authorization = "Bearer $ApiKey" }
 
 try {
     $tableDataset = New-TestDataset "table"

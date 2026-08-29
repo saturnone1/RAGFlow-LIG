@@ -495,6 +495,64 @@ for (const localePath of ['src/locales/en.ts', 'src/locales/ko.ts']) {
   write(localePath, content);
 }
 
+content = read('src/pages/user-setting/setting-team/index.tsx');
+content = replaceOnce(
+  content,
+  "{t('setting.invite')}",
+  "{t('setting.addMember')}",
+  'offline team add button',
+);
+write('src/pages/user-setting/setting-team/index.tsx', content);
+
+content = read('src/pages/user-setting/setting-team/add-user-modal.tsx');
+content = replaceOnce(
+  content,
+  "title={t('setting.add')}",
+  "title={t('setting.addMember')}",
+  'offline team add dialog title',
+);
+content = replaceOnce(
+  content,
+  "{t('setting.inviteTip')}",
+  "{t('setting.addMemberTip')}",
+  'offline team add guidance',
+);
+write('src/pages/user-setting/setting-team/add-user-modal.tsx', content);
+
+content = read('src/pages/user-setting/setting-team/user-table.tsx');
+content = replaceOnce(
+  content,
+  "    console.log('sortedData', data, searchUser);\n",
+  '',
+  'team member console cleanup',
+);
+write('src/pages/user-setting/setting-team/user-table.tsx', content);
+
+content = read('src/locales/en.ts');
+content = replaceOnce(
+  content,
+  `      invite: 'Invite member',
+      inviteTip:
+        'Only registered users can be invited. Please register the account before sending an invitation.',`,
+  `      invite: 'Invite member',
+      inviteTip:
+        'Only registered users can be invited. Please register the account before sending an invitation.',
+      addMember: 'Add member',
+      addMemberTip:
+        'Enter an existing internal account. The user is added immediately without email or acceptance.',`,
+  'offline team English locale',
+);
+write('src/locales/en.ts', content);
+
+content = read('src/locales/ko.ts');
+content = replaceOnce(
+  content,
+  "      invite: '멤버 초대',",
+  "      invite: '멤버 초대',\n      addMember: '멤버 추가',\n      addMemberTip: '가입된 사내 계정의 이메일을 입력하세요. 이메일 발송이나 수락 대기 없이 즉시 팀에 추가됩니다.',",
+  'offline team Korean locale',
+);
+write('src/locales/ko.ts', content);
+
 content = read('src/components/api-service/chat-overview-modal/backend-service-api.tsx');
 content = replaceOnce(content, '<CardTitle>RAGFlow API</CardTitle>', '<CardTitle>LIG AI Knowledge Hub API</CardTitle>', 'API card title');
 write('src/components/api-service/chat-overview-modal/backend-service-api.tsx', content);

@@ -26,6 +26,9 @@ RUN node /build/lig-ui/verify-typecheck-baseline.mjs snapshot /tmp/ragflow-v0.26
         src/pages/home/banner.tsx \
         src/pages/dataset/dataset/use-upload-document.ts \
         src/pages/dataset/dataset-setting/form-schema.test.ts \
+        src/pages/user-setting/setting-team/index.tsx \
+        src/pages/user-setting/setting-team/add-user-modal.tsx \
+        src/pages/user-setting/setting-team/user-table.tsx \
         --ext .ts,.tsx --report-unused-disable-directives \
     && npx jest \
         src/brand/document-password.test.ts \
@@ -72,6 +75,7 @@ RUN python3 /tmp/apply-lig-runtime-patches.py \
         /ragflow/deepdoc/vision/ocr.py \
         /ragflow/api/db/db_models.py \
         /ragflow/api/apps/services/dataset_api_service.py \
+        /ragflow/api/apps/restful_apis/tenant_api.py \
     && rm /tmp/apply-lig-runtime-patches.py
 RUN sed -i 's/client_max_body_size 1024M;/client_max_body_size 0;/' /etc/nginx/nginx.conf \
     && grep -q 'client_max_body_size 0;' /etc/nginx/nginx.conf

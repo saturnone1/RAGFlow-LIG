@@ -41,7 +41,7 @@ Docker Desktop을 시작한 뒤 이 폴더에서 PowerShell을 열고 실행합�
 .\test-paddleocr-vl.ps1
 ```
 
-각 설치 스크립트는 자신이 사용하는 아카이브의 SHA-256과 Docker 이미지 ID를 검증한 뒤 이미지를 불러옵니다. 기본 설치는 `verify-cpu-images.ps1`로 RAGFlow 문서 암호·OCR 연동·청킹 런타임을 검사하고, 일반 PaddleOCR 추가 설치는 한국어 모델이 들어 있는 독립 이미지를 따로 검사합니다. 설치 PC에서는 `http://127.0.0.1:42300`, 같은 사내망에서는 `http://<RAG-PC-IP>:42300`으로 접속합니다. 공식 MCP `42303`은 클라이언트 Bearer 없이 연결하고, LIG 관리 MCP `42306`은 서버 `.env.secret` 키를 사용합니다.
+각 설치 스크립트는 자신이 사용하는 아카이브의 SHA-256과 Docker 이미지 ID를 검증한 뒤 이미지를 불러옵니다. 기본 설치는 `verify-cpu-images.ps1`로 RAGFlow 문서 암호·OCR 연동·청킹 런타임을 검사하고, 일반 PaddleOCR 추가 설치는 한국어 모델이 들어 있는 독립 이미지를 따로 검사합니다. 설치 PC에서는 `http://127.0.0.1:42300`, 같은 사내망에서는 `http://<RAG-PC-IP>:42300`으로 접속합니다. 공식 MCP `42303`과 LIG 관리 MCP `42306`에는 각각 사용자의 개인 RAGFlow API 키를 Bearer로 등록해야 하며, 두 MCP 모두 Web UI와 같은 데이터셋 권한을 적용합니다.
 
 반입된 기본 RAGFlow 이미지에 문서 암호·OCR 연동·청킹 수정이 실제 포함됐는지는 다음 명령으로 별도 검증할 수 있습니다. 한국어 OCR 모델 검증은 `install-paddleocr.ps1` 또는 `test-paddleocr.ps1`에서 수행합니다.
 
@@ -90,7 +90,7 @@ PDF, Office 및 HWP/HWPX의 파일 열기 비밀번호는 업로드 창에서 �
 
 ## 비밀값과 내부 vLLM
 
-실제 비밀값은 번들에 포함되지 않습니다. 최초 설치 때 `LIG-Deployment\.env.secret.example`을 복사해 `.env.secret`을 자동 생성하고 문서 암호 키, 일반/VL OCR 토큰과 공식 MCP 서버측 키를 각각 만듭니다. 최초 사용자가 생성되면 공식 MCP 키가 첫 테넌트에 자동 등록되므로 클라이언트가 API 키를 보관할 필요가 없습니다.
+실제 비밀값은 번들에 포함되지 않습니다. 최초 설치 때 `LIG-Deployment\.env.secret.example`을 복사해 `.env.secret`을 자동 생성하고 문서 암호 키와 일반/VL OCR 내부 토큰을 만듭니다. MCP 서버측 공용 키는 만들지 않으며 각 사용자가 자신의 RAGFlow API 키를 MCP 클라이언트에 등록합니다.
 
 폐쇄망 내부 vLLM은 RAGFlow 설정에서 OpenAI 호환 공급자로 등록합니다.
 

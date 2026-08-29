@@ -22,11 +22,8 @@ $start.WorkingDirectory = $root
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
 $start.Environment["RAGFLOW_BASE_URL"] = $BaseUrl
-$start.Environment["RAGFLOW_API_KEY"] = $ApiKey
 $start.Environment["RAGFLOW_WRITES_ENABLED"] = if ($Crud -or $GenericUpload) { "true" } else { "false" }
 $start.Environment["RAGFLOW_FILE_WRITES_ENABLED"] = "true"
-$mcpApiKey = "test-$([guid]::NewGuid().ToString('N'))"
-$start.Environment["LIG_MCP_API_KEY"] = $mcpApiKey
 $start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:42206"
 $process = [Diagnostics.Process]::Start($start)
 
@@ -35,7 +32,7 @@ function Invoke-Mcp([string]$Body, [string]$Session = "", [switch]$WithoutAuthen
     $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Post, "http://127.0.0.1:42206/mcp")
     try {
         [void]$request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream")
-        if (-not $WithoutAuthentication) { [void]$request.Headers.TryAddWithoutValidation("Authorization", "Bearer $mcpApiKey") }
+        if (-not $WithoutAuthentication) { [void]$request.Headers.TryAddWithoutValidation("Authorization", "Bearer $ApiKey") }
         if ($Session) { [void]$request.Headers.TryAddWithoutValidation("Mcp-Session-Id", $Session) }
         $request.Content = [Net.Http.StringContent]::new($Body, [Text.Encoding]::UTF8, "application/json")
         $response = $client.SendAsync($request).GetAwaiter().GetResult()
@@ -65,19 +62,6 @@ try {
         catch { if ($process.HasExited) { throw "Adapter exited: $($process.ExitCode)" }; Start-Sleep -Milliseconds 500 }
     }
     if (-not $health -or $health.status -ne "ok") { throw "Adapter health check failed" }
-
-    $externalGuard = [Diagnostics.ProcessStartInfo]::new($adapter)
-    $externalGuard.UseShellExecute = $false
-    $externalGuard.CreateNoWindow = $true
-    $externalGuard.RedirectStandardError = $true
-    $externalGuard.Environment["ASPNETCORE_URLS"] = "http://0.0.0.0:42221"
-    $externalGuard.Environment["LIG_MCP_API_KEY"] = ""
-    $externalGuardProcess = [Diagnostics.Process]::Start($externalGuard)
-    if (-not $externalGuardProcess.WaitForExit(5000)) {
-        Stop-Process -Id $externalGuardProcess.Id -Force
-        throw "MCP started on an external interface without LIG_MCP_API_KEY"
-    }
-    if ($externalGuardProcess.ExitCode -eq 0) { throw "External unauthenticated startup guard did not fail" }
 
     try {
         Invoke-Mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unauthenticated-test","version":"1"}}}' "" -WithoutAuthentication | Out-Null

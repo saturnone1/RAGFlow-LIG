@@ -11,6 +11,8 @@ services:
     env_file:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
+    environment:
+      LIG_LEGACY_MCP_API_KEY: ${RAGFLOW_MCP_API_KEY:-}
     volumes:
       - ./service_conf.yaml.template:/ragflow/conf/service_conf.yaml.template:ro
     command:
@@ -31,8 +33,6 @@ services:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
-      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
-      RAGFLOW_MCP_LAUNCH_MODE: self-host
       LIG_DOCUMENT_PASSWORD_KEY: ${LIG_DOCUMENT_PASSWORD_KEY:?Set LIG_DOCUMENT_PASSWORD_KEY in LIG-Deployment/.env.secret}
       LIG_DOCUMENT_PASSWORD_KEY_ID: ${LIG_DOCUMENT_PASSWORD_KEY_ID:-primary}
       LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS: ${LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS:-}
@@ -58,7 +58,7 @@ services:
       - --mcp-port=9382
       - --mcp-base-url=http://127.0.0.1:9380
       - --mcp-script-path=/ragflow/mcp/server/server.py
-      - --mcp-mode=self-host
+      - --mcp-mode=host
       - --disable-taskexecutor
       - --workers=${TASK_EXECUTOR_WORKERS:-3}
     depends_on:
@@ -78,8 +78,6 @@ services:
       - ${RAGFLOW_UPSTREAM_ENV_FILE:?Set RAGFLOW_UPSTREAM_ENV_FILE}
       - ${LIG_ENV_FILE:?Set LIG_ENV_FILE}
     environment:
-      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
-      RAGFLOW_MCP_LAUNCH_MODE: self-host
       LIG_DOCUMENT_PASSWORD_KEY: ${LIG_DOCUMENT_PASSWORD_KEY:?Set LIG_DOCUMENT_PASSWORD_KEY in LIG-Deployment/.env.secret}
       LIG_DOCUMENT_PASSWORD_KEY_ID: ${LIG_DOCUMENT_PASSWORD_KEY_ID:-primary}
       LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS: ${LIG_DOCUMENT_PASSWORD_PREVIOUS_KEYS:-}
@@ -108,7 +106,7 @@ services:
       - --mcp-port=9382
       - --mcp-base-url=http://127.0.0.1:9380
       - --mcp-script-path=/ragflow/mcp/server/server.py
-      - --mcp-mode=self-host
+      - --mcp-mode=host
       - --disable-taskexecutor
       - --workers=${TASK_EXECUTOR_WORKERS:-3}
     depends_on:
@@ -248,7 +246,6 @@ services:
       PADDLEOCR_INTERNAL_TOKEN: ${PADDLEOCR_INTERNAL_TOKEN:?Set PADDLEOCR_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
       PADDLEOCR_VL_BASE_URL: http://paddleocr-vl:8080
       PADDLEOCR_VL_ACCESS_TOKEN: ${PADDLEOCR_VL_INTERNAL_TOKEN:?Set PADDLEOCR_VL_INTERNAL_TOKEN in LIG-Deployment/.env.secret}
-      RAGFLOW_MCP_HOST_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
       PADDLEOCR_INTERNAL_BASE_URL: http://paddleocr:8080
       PADDLEOCR_JOB_WORKERS: ${PADDLEOCR_JOB_WORKERS:-1}
       PADDLEOCR_MAX_UPLOAD_BYTES: ${PADDLEOCR_MAX_UPLOAD_BYTES:-0}
@@ -347,11 +344,9 @@ services:
         condition: service_healthy
     environment:
       RAGFLOW_BASE_URL: http://ragflow-runtime:9380
-      RAGFLOW_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
       RAGFLOW_WRITES_ENABLED: "true"
       RAGFLOW_FILE_WRITES_ENABLED: "false"
       RAGFLOW_MAX_TEXT_RESPONSE_MB: "4"
-      LIG_MCP_API_KEY: ${RAGFLOW_MCP_API_KEY:?Set RAGFLOW_MCP_API_KEY in LIG-Deployment/.env.secret}
       ASPNETCORE_URLS: http://0.0.0.0:8080
     ports:
       - ${RAGFLOW_MCP_LIG_PORT:?Set RAGFLOW_MCP_LIG_PORT in LIG-Deployment/.env.lig}:8080

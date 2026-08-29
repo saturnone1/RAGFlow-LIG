@@ -65,7 +65,7 @@ Copy-Item .env.secret.example .env.secret
 .\lig-ragflow.ps1 start
 ```
 
-`config`는 공식 MCP가 내부 RAGFlow API 호출에 사용할 서버측 키를 생성합니다. 최초 사용자가 만들어지면 이 키를 첫 활성 테넌트에 자동 등록하므로 공식 MCP 클라이언트에는 Bearer 헤더를 넣지 않습니다. `verify-cpu-images.ps1`은 별도 테스트 패키지를 설치하지 않고 빌드된 이미지 안에서 암호 PDF의 실제 본문 보존, 일반 문서의 잔존 암호 제거, 청킹 방식 변경 시 봉인 암호 승계, OCR/청킹 런타임 패치 포함, 한국어 PP-OCRv5 모델 메타데이터와 대형 페이지 축소 계산, MCP .NET 런타임을 검사합니다.
+`config`는 문서 암호 키와 OCR 내부 통신 토큰만 생성합니다. MCP 인증 정보는 서버에 만들지 않으며 각 클라이언트가 개인 RAGFlow API 키를 Bearer로 전달합니다. `verify-cpu-images.ps1`은 별도 테스트 패키지를 설치하지 않고 빌드된 이미지 안에서 암호 PDF의 실제 본문 보존, 일반 문서의 잔존 암호 제거, 청킹 방식 변경 시 봉인 암호 승계, OCR/청킹 런타임 패치 포함, 한국어 PP-OCRv5 모델 메타데이터와 대형 페이지 축소 계산, MCP .NET 런타임을 검사합니다.
 
 NVIDIA GPU 실행 이미지는 CPU 이미지 위에 고정된 CUDA 12.8·cuDNN 9 라이브러리를 추가합니다. GPU 장비 또는 CPU/GPU 에어갭 번들을 만들 PC에서는 기본 빌드 후 다음 명령도 실행합니다.
 
@@ -268,7 +268,9 @@ NVIDIA GPU 장비에는 다음 설치 스크립트를 사용합니다. CUDA 접�
 
 ## MCP 범위
 
-RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://<RAG-PC-IP>:42303/mcp`와 LIG 관리 MCP `http://<RAG-PC-IP>:42306/mcp`를 RAGFlow와 함께 시작합니다. 공식 MCP는 `self-host` 모드이며 서버가 내부 API 키를 보관하므로 MCP 클라이언트에는 Authorization/Bearer 헤더를 설정하지 않습니다. 최초 사용자 생성 직후 자동등록이 끝날 때까지 최대 30초 정도 기다린 다음 연결하십시오. 관리 MCP는 데이터셋·문서와 나머지 `/api/v1` 운영 기능을 제공하며, 쓰기 기능 때문에 기존처럼 `.env.secret`의 `RAGFLOW_MCP_API_KEY`를 Bearer 키로 사용합니다.
+RAGFlow 기본 MCP는 검색과 데이터셋·채팅 목록 조회에 집중합니다. 이 Compose는 공식 MCP `http://<RAG-PC-IP>:42303/mcp`와 LIG 관리 MCP `http://<RAG-PC-IP>:42306/mcp`를 RAGFlow와 함께 시작합니다. 두 MCP 모두 클라이언트가 보낸 `Authorization: Bearer <개인 RAGFlow API 키>`를 RAGFlow API에 그대로 전달합니다. 따라서 Web UI와 동일한 테넌트 권한이 적용되며 다른 사용자의 비공개 데이터셋은 조회하거나 수정할 수 없습니다. API 키는 Web UI의 개인 설정 API 메뉴에서 사용자별로 발급하십시오. 기존 배포가 만들었던 첫 테넌트 공용 MCP 키는 마이그레이션 컨테이너가 자동 폐기합니다.
+
+폐쇄망 팀 구성은 이메일 초대를 사용하지 않습니다. 사용자가 초기 가입 화면에서 사내 계정을 먼저 만든 뒤 팀 소유자가 `개인 설정 → 팀 → 멤버 추가`에서 그 계정의 이메일을 입력합니다. 등록된 활성 계정이면 수락 대기 없이 즉시 일반 팀원으로 추가되며 메일 서버나 외부 링크가 필요하지 않습니다. 데이터셋 권한을 `team`으로 바꾸면 추가된 팀원은 자신의 Web UI 세션과 개인 API 키를 사용하는 MCP에서 같은 데이터셋을 볼 수 있습니다. `me` 데이터셋은 계속 소유자에게만 보입니다.
 
 `9382`는 RAGFlow 컨테이너 내부 MCP 포트이며 이 배포의 Windows 호스트 접속 포트가 아닙니다. REST API는 `http://127.0.0.1:42301/api/v1/...`에 호출합니다. `42300`은 웹 UI이므로 `http://127.0.0.1:42300/api/v1/chat` 같은 호출은 404가 정상이며, RAGFlow에는 범용 `/api/v1/chat` 단일 엔드포인트가 없습니다. MCP 클라이언트에는 REST API 주소가 아니라 위 `/mcp` 주소를 등록하십시오.
 

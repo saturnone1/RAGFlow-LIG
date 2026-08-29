@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from runtime_patches.dataset_settings import apply_dataset_settings_patch
+from runtime_patches.offline_team_membership import apply_offline_team_membership_patch
 
 EXPECTED_EMBEDDING_SHA256 = "b844aec1bd2bc49bb54e55beb7d6273a7da6cbd5cfe15b3e96fd7882e0b3e4eb"
 EXPECTED_PADDLEOCR_SHA256 = "94b735a444ee81a03bcd7bd996851a7e3759ee95e14e0b8d838a5d59f68e6704"
@@ -62,7 +63,7 @@ NEW_EMBEDDING_PROGRESS = (
 
 
 def main() -> None:
-    if len(sys.argv) != 33:
+    if len(sys.argv) != 34:
         raise SystemExit(
             "usage: apply-runtime-patches.py <embedding_model.py> "
             "<paddleocr_parser.py> <task_executor.py> <document_api.py> "
@@ -74,7 +75,7 @@ def main() -> None:
             "<embedding_service.py> <dataflow_service.py> <ocr_model.py> "
             "<infinity_conn.py> <infinity_conn_base.py> <document_service.py> "
             "<task_executor_limiter.py> <settings.py> <deepdoc_ocr.py> "
-            "<db_models.py> <dataset_api_service.py>"
+            "<db_models.py> <dataset_api_service.py> <tenant_api.py>"
         )
 
     embedding_target = Path(sys.argv[1])
@@ -2392,6 +2393,7 @@ def main() -> None:
     db_models_target.write_text(text, encoding="utf-8")
 
     apply_dataset_settings_patch(Path(sys.argv[32]))
+    apply_offline_team_membership_patch(Path(sys.argv[33]))
 
 
 def checked_target(path: Path, expected_sha256: str, label: str) -> Path:

@@ -6,12 +6,14 @@ public sealed class RagFlowClient
 {
     private readonly HttpClient _http;
     private readonly RagFlowSettings _settings;
+    private readonly IHttpContextAccessor _httpContextAccessor;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public RagFlowClient(HttpClient http, RagFlowSettings settings)
+    public RagFlowClient(HttpClient http, RagFlowSettings settings, IHttpContextAccessor httpContextAccessor)
     {
         _http = http;
         _settings = settings;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<RagFlowHealth> HealthAsync()
@@ -45,10 +47,9 @@ public sealed class RagFlowClient
         available ? "ok" : "unavailable",
         available,
         _settings.BaseUrl,
-        !string.IsNullOrWhiteSpace(_settings.ApiKey),
+        true,
         _settings.WritesEnabled,
         _settings.FileWritesEnabled,
-        !string.IsNullOrWhiteSpace(_settings.McpApiKey),
         _settings.MaxTextResponseBytes,
         httpStatus,
         error);
@@ -153,7 +154,6 @@ public sealed class RagFlowClient
 
     public async Task<JsonElement> UploadAsync(string datasetId, string filePath)
     {
-        _settings.RequireApiKey();
         var fullPath = Path.GetFullPath(filePath);
         if (!File.Exists(fullPath)) throw new FileNotFoundException("Upload file not found.", fullPath);
         using var request = CreateRequest(HttpMethod.Post, $"api/v1/datasets/{Uri.EscapeDataString(datasetId)}/documents");
@@ -169,7 +169,6 @@ public sealed class RagFlowClient
 
     public async Task<JsonElement> UploadFilesAsync(string relativePath, string[] filePaths, string fieldName, string? formFieldsJson)
     {
-        _settings.RequireApiKey();
         _settings.RequireWrites();
         if (filePaths.Length == 0) throw new ArgumentException("At least one upload file is required.", nameof(filePaths));
         if (string.IsNullOrWhiteSpace(fieldName)) throw new ArgumentException("Multipart field name is required.", nameof(fieldName));
@@ -203,7 +202,6 @@ public sealed class RagFlowClient
 
     public async Task<object> DownloadAsync(string method, string relativePath, string destinationPath, string? bodyJson, bool overwrite)
     {
-        _settings.RequireApiKey();
         _settings.RequireFileWrites();
         var httpMethod = ParseMethod(method);
         if (httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head) _settings.RequireWrites();
@@ -262,7 +260,6 @@ public sealed class RagFlowClient
 
     private async Task<JsonElement> SendAsync(HttpMethod method, string path, object? body = null)
     {
-        _settings.RequireApiKey();
         using var request = CreateRequest(method, path);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body, JsonOptions), Encoding.UTF8, "application/json");
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
@@ -271,7 +268,6 @@ public sealed class RagFlowClient
 
     private async Task<JsonElement> SendJsonAsync(HttpMethod method, string path, string? bodyJson)
     {
-        _settings.RequireApiKey();
         using var request = CreateRequest(method, path);
         if (!string.IsNullOrWhiteSpace(bodyJson)) request.Content = CreateJsonContent(bodyJson);
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
@@ -281,8 +277,20 @@ public sealed class RagFlowClient
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, path.TrimStart('/'));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", GetClientApiKey());
         return request;
+    }
+
+    private string GetClientApiKey()
+    {
+        var authorization = _httpContextAccessor.HttpContext?.Request.Headers.Authorization.ToString() ?? "";
+        const string prefix = "Bearer ";
+        var token = authorization.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? authorization[prefix.Length..].Trim()
+            : "";
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("A personal RAGFlow API key is required as a Bearer token.");
+        return token;
     }
 
     private static HttpMethod ParseMethod(string method) => method.Trim().ToUpperInvariant() switch
@@ -371,10 +379,9 @@ public sealed record RagFlowHealth(
     string Status,
     bool Available,
     string RagflowBaseUrl,
-    bool ApiKeyConfigured,
+    bool ClientBearerRequired,
     bool WritesEnabled,
     bool FileWritesEnabled,
-    bool McpAuthenticationEnabled,
     long MaxTextResponseBytes,
     int? HttpStatus,
     string? Error);

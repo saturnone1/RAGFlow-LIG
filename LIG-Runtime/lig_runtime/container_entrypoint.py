@@ -56,6 +56,17 @@ def initialize_database() -> None:
     init_database_tables()
 
 
+def revoke_legacy_shared_mcp_token() -> None:
+    token = os.environ.get("LIG_LEGACY_MCP_API_KEY", "").strip()
+    if not token or "replace-with" in token:
+        return
+    from api.db.db_models import APIToken
+
+    deleted = APIToken.delete().where(APIToken.token == token).execute()
+    if deleted:
+        print("Revoked the legacy shared MCP tenant token.", flush=True)
+
+
 def spawn(command: list[str], *, environment: dict[str, str] | None = None) -> subprocess.Popen:
     process = subprocess.Popen(command, cwd=ROOT, env=environment)
     with CHILDREN_LOCK:
@@ -131,8 +142,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--mcp-host", default="127.0.0.1")
     parser.add_argument("--mcp-port", type=int, default=9382)
     parser.add_argument("--mcp-base-url", default="http://127.0.0.1:9380")
-    parser.add_argument("--mcp-mode", default="self-host")
-    parser.add_argument("--mcp-host-api-key", default="")
+    parser.add_argument("--mcp-mode", default="host")
     parser.add_argument("--mcp-script-path", default="/ragflow/mcp/server/server.py")
     parser.add_argument("--no-transport-sse-enabled", action="store_true")
     parser.add_argument("--no-transport-streamable-http-enabled", action="store_true")
@@ -175,6 +185,8 @@ def main() -> int:
             check=True,
         )
 
+    revoke_legacy_shared_mcp_token()
+
     if args.migrate_only:
         return 0
 
@@ -205,10 +217,9 @@ def main() -> int:
         start_loop([PYTHON, "rag/svr/sync_data_source.py"])
 
     if args.enable_mcpserver:
-        mcp_api_key = args.mcp_host_api_key or os.environ.get("RAGFLOW_MCP_HOST_API_KEY", "")
         command = [
             PYTHON, args.mcp_script_path, f"--host={args.mcp_host}", f"--port={args.mcp_port}",
-            f"--base-url={args.mcp_base_url}", f"--mode={args.mcp_mode}", f"--api-key={mcp_api_key}",
+            f"--base-url={args.mcp_base_url}", f"--mode={args.mcp_mode}",
             "--no-transport-sse-enabled" if args.no_transport_sse_enabled else "--transport-sse-enabled",
             "--no-transport-streamable-http-enabled" if args.no_transport_streamable_http_enabled else "--transport-streamable-http-enabled",
             "--no-json-response" if args.no_json_response else "--json-response",

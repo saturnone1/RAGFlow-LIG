@@ -1,15 +1,12 @@
 using ModelContextProtocol.Server;
-using System.Security.Cryptography;
-using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 var listenUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://127.0.0.1:42206";
 var settings = RagFlowSettings.Load();
-if (!IsLoopbackOnly(listenUrls) && string.IsNullOrWhiteSpace(settings.McpApiKey))
-    throw new InvalidOperationException("LIG_MCP_API_KEY is required when ASPNETCORE_URLS listens beyond localhost.");
 
 builder.WebHost.UseUrls(listenUrls);
 builder.Services.AddSingleton(settings);
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<RagFlowClient>((services, client) =>
 {
     var settings = services.GetRequiredService<RagFlowSettings>();
@@ -23,7 +20,7 @@ builder.Services.AddMcpServer().WithHttpTransport(options => options.EnableLegac
 var app = builder.Build();
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path == "/healthz" || string.IsNullOrWhiteSpace(settings.McpApiKey))
+    if (context.Request.Path == "/healthz")
     {
         await next();
         return;
@@ -31,13 +28,11 @@ app.Use(async (context, next) =>
 
     var authorization = context.Request.Headers.Authorization.ToString();
     const string prefix = "Bearer ";
-    var supplied = authorization.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? authorization[prefix.Length..] : "";
-    var expectedBytes = Encoding.UTF8.GetBytes(settings.McpApiKey);
-    var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
-    if (expectedBytes.Length != suppliedBytes.Length || !CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes))
+    var supplied = authorization.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? authorization[prefix.Length..].Trim() : "";
+    if (string.IsNullOrWhiteSpace(supplied))
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await context.Response.WriteAsJsonAsync(new { error = "A valid LIG MCP bearer token is required." });
+        await context.Response.WriteAsJsonAsync(new { error = "A personal RAGFlow API key is required as a Bearer token." });
         return;
     }
     await next();
@@ -50,9 +45,3 @@ app.MapGet("/healthz", async (RagFlowClient client) =>
 app.MapMcp("/mcp");
 app.MapMcp("");
 await app.RunAsync();
-
-static bool IsLoopbackOnly(string urls) => urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).All(url =>
-{
-    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
-    return uri.IsLoopback || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase);
-});

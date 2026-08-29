@@ -167,7 +167,7 @@ def _provision_ragflow_tenants() -> None:
     """Register environment-backed OCR models for existing and new tenants."""
     while not provisioner_stop.is_set():
         try:
-            from api.db.db_models import APIToken, Tenant
+            from api.db.db_models import Tenant
             from api.db.joint_services.tenant_model_service import (
                 ensure_paddleocr_from_env,
                 ensure_paddleocr_vl_from_env,
@@ -179,10 +179,6 @@ def _provision_ragflow_tenants() -> None:
                 .where(Tenant.status == "1")
                 .order_by(Tenant.create_time, Tenant.id)
             ]
-            mcp_api_key = os.getenv("RAGFLOW_MCP_HOST_API_KEY", "").strip()
-            if tenant_ids and mcp_api_key and not APIToken.select().where(APIToken.token == mcp_api_key).exists():
-                APIToken.create(tenant_id=tenant_ids[0], token=mcp_api_key)
-                app.logger.info("Provisioned the server-side official MCP API key for the primary tenant")
             for tenant_id in tenant_ids:
                 for attempt in range(2):
                     try:

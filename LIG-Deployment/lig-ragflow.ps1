@@ -189,24 +189,6 @@ function Ensure-LigSecrets {
         }
     }
     $lines = @(Get-Content -LiteralPath $secretFile)
-    $mcpKeyLineIndex = -1
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        if ($lines[$index] -match '^\s*RAGFLOW_MCP_API_KEY=') { $mcpKeyLineIndex = $index }
-    }
-    $mcpKey = if ($mcpKeyLineIndex -ge 0) { ($lines[$mcpKeyLineIndex] -split '=', 2)[1].Trim() } else { "" }
-    if ([string]::IsNullOrWhiteSpace($mcpKey) -or $mcpKey -eq "ragflow-replace-with-a-local-api-key") {
-        $existingMcpKey = Get-ExistingContainerEnvValue "RAGFLOW_MCP_HOST_API_KEY"
-        if ($existingMcpKey -and $existingMcpKey -ne "ragflow-replace-with-a-local-api-key") {
-            $mcpKey = $existingMcpKey
-            Write-Host "Recovered the existing server-side official MCP API key from the LIG runtime."
-        }
-        else {
-            $mcpKey = "ragflow-$((New-RandomSecret).TrimEnd('=').Replace('+', '-').Replace('/', '_'))"
-            Write-Host "Generated the server-side official MCP API key. MCP clients do not need this key."
-        }
-        $mcpKeyLine = "RAGFLOW_MCP_API_KEY=$mcpKey"
-        if ($mcpKeyLineIndex -ge 0) { $lines[$mcpKeyLineIndex] = $mcpKeyLine } else { $lines += $mcpKeyLine }
-    }
     $keyLineIndex = -1
     $legacyKeyLineIndex = -1
     for ($index = 0; $index -lt $lines.Count; $index++) {
@@ -448,19 +430,35 @@ function Test-McpInitialize([string]$Url, [string]$BearerToken = "") {
             Reachable = $true
             StatusCode = [int]$response.StatusCode
             SessionCreated = [bool]$response.Headers["Mcp-Session-Id"]
+            AuthenticationRequired = $false
             Error = $null
         }
     }
     catch {
         $statusCode = $null
         if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+        $authenticationRequired = $statusCode -eq 401
         return [pscustomobject]@{
-            Reachable = $false
+            Reachable = $authenticationRequired
             StatusCode = $statusCode
             SessionCreated = $false
-            Error = Protect-DiagnosticText $_.Exception.Message
+            AuthenticationRequired = $authenticationRequired
+            Error = if ($authenticationRequired) { $null } else { Protect-DiagnosticText $_.Exception.Message }
         }
     }
+}
+
+function Remove-LegacyMcpSecret {
+    $removed = $false
+    foreach ($path in @($secretFile, $persistentSecretFile)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $lines = @(Get-Content -LiteralPath $path)
+        $filtered = @($lines | Where-Object { $_ -notmatch '^\s*RAGFLOW_MCP_API_KEY=' })
+        if ($filtered.Count -eq $lines.Count) { continue }
+        [IO.File]::WriteAllLines($path, $filtered, [Text.UTF8Encoding]::new($false))
+        $removed = $true
+    }
+    if ($removed) { Write-Host "폐기된 공용 MCP 키를 실행 설정과 영속 설정에서 제거했습니다." }
 }
 
 function Get-RedisQueueDiagnostics([string]$ContainerId, [string]$Password) {
@@ -494,8 +492,6 @@ function Get-RedisQueueDiagnostics([string]$ContainerId, [string]$Password) {
 function Invoke-Diagnostics {
     $configuration = Get-EnvFileValues $ligEnvFile
     $upstreamConfiguration = Get-EnvFileValues $upstreamEnvFile
-    $secrets = Get-EnvFileValues $secretFile
-    $apiKey = $secrets["RAGFLOW_MCP_API_KEY"]
     $apiBinding = Get-ConfigurationValue $configuration "SVR_HTTP_PORT" "127.0.0.1:42301"
     $apiPort = ($apiBinding -split ':')[-1]
     if ($apiPort -notmatch '^\d+$') {
@@ -539,22 +535,11 @@ function Invoke-Diagnostics {
             catch { $dependencyHealth = [pscustomobject]@{ status = "unavailable" } }
         }
     }
-    $hasUsableApiKey = $apiKey -and $apiKey -notmatch 'replace-with'
-    if ($apiReachable -and $hasUsableApiKey) {
-        try {
-            $headers = @{ Authorization = "Bearer $apiKey" }
-            $response = Invoke-RestMethod -Uri "$apiBase/api/v1/system/status" -Headers $headers -TimeoutSec 10
-            $serviceHealth = $response.data
-        }
-        catch {
-            $healthDetail = "Authenticated dependency status is unavailable: $($_.Exception.Message)"
-        }
-    }
-    elseif ($apiReachable) {
-        $healthDetail = "RAGFlow API is reachable; configure RAGFLOW_MCP_API_KEY for authenticated dependency details."
+    if ($apiReachable) {
+        $healthDetail = "RAGFlow API is reachable. Authenticated tenant details require the caller's personal API key."
     }
     $officialMcpProbe = Test-McpInitialize $officialMcpUrl
-    $managementMcpProbe = Test-McpInitialize $managementMcpUrl $(if ($hasUsableApiKey) { $apiKey } else { "" })
+    $managementMcpProbe = Test-McpInitialize $managementMcpUrl
     $ocrBinding = Get-ConfigurationValue $configuration "PADDLEOCR_PORT" "127.0.0.1:42316"
     $ocrPort = ($ocrBinding -split ':')[-1]
     $ocrUrl = "http://127.0.0.1:$ocrPort"
@@ -877,6 +862,7 @@ switch ($Action) {
         # 선택 실행한 OCR/embedding 프로필은 이 명령의 활성 프로필에 포함되지
         # 않을 수 있으므로 orphan으로 제거하지 않습니다. 전체 정리는 stop이 담당합니다.
         Invoke-Compose @("up", "-d")
+        Remove-LegacyMcpSecret
         Invoke-Compose @("ps")
     }
     "paddleocr-start" {
