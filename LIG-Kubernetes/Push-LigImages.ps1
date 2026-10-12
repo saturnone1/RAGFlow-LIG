@@ -37,4 +37,3 @@ foreach ($source in $images) {
     if ($LASTEXITCODE -ne 0) { throw "Registry 업로드 실패: $target" }
 }
 Write-Host "Registry 업로드를 완료했습니다: $Registry"
-

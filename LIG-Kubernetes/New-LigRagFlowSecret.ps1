@@ -49,4 +49,3 @@ $json | & kubectl apply -f -
 if ($LASTEXITCODE -ne 0) { throw "Secret 적용 실패" }
 Write-Host "Secret을 생성했습니다: $Namespace/$Name"
 Write-Host "재해 복구를 위해 Kubernetes Secret을 암호화된 관리 저장소에 백업하십시오."
-
